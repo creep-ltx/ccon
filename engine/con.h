@@ -215,4 +215,6 @@ struct con {
   LONG drishine; /* 4184 */
   LONG oldtab[8]; /* 4188 */
   LONG breakarg; /* 4220 */
-}; /* size 4224 */
+  LONG rdtask; /* 4224 */
+  LONG wrtask; /* 4228 */
+}; /* size 4232 */

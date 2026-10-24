@@ -11,6 +11,24 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.1b2] — 2026-10-24 (beta)
+
+### Fixed
+- **Ctrl+C never signals a program that has ended.** After `Run List`
+  finished, Ctrl+C at the prompt could signal the freed task and corrupt
+  memory. CCON now remembers the last reader and the last writer, as the
+  stock console does, forgets each when it closes its handle, checks
+  that a task still exists before signalling it, and falls back to the
+  task whose read is waiting (Audit9 K1).
+- **A shell's `ACTION_CHANGE_SIGNAL` target is kept** until the next
+  read; a later write no longer takes it over, and both the target and
+  the writer get the break (Audit9 K2). The packet's handle argument is
+  used when given (K11), and the answer is always a message port, never
+  a bare task (K12).
+- **Ctrl+C stops a pending paste**, as on stock.
+
+---
+
 ## [1.3.1b1] — 2026-10-14 (beta)
 
 ### Fixed

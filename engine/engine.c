@@ -1164,6 +1164,9 @@ LONG wacc(struct fx *x, struct dpkt *pkt)
     if (len < 0 || len > WOBSZ - k->wolen) return 0;   /* not wolen + len: wraps (Audit8 J14) */
     *x->curcon = k;
     k->breaktask = ((LONG *)pkt->port)[4];          /* mp_SigTask */
+    /* 1.3.1b2 (Audit9 K1/K2): the writer half of the break pair - only
+       a PA_SIGNAL port (mp_Flags & PF_ACTION == 0) has a task behind it */
+    k->wrtask = (((UBYTE *)pkt->port)[14] & 3) ? 0 : ((LONG *)pkt->port)[4];
     bcopy((UBYTE *)k->wob + k->wolen, (const UBYTE *)pkt->arg2, len);
     k->wolen += len;
     k->jwrote = TRUE;

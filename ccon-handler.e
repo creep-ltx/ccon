@@ -142,7 +142,7 @@ CONST MARGIN=0,        -> v1.1b43: was 4 - stock CON: has no inset at
                         -> clamped to 255 (gridcalc), rows is not - a
                         -> window taller than DFROWS rows just runs the
                         -> legacy immediate path (dfstart declines)
-      FXCONSIZE=4224,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
+      FXCONSIZE=4232,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
       WOBSZ=16384,      -> S5 write-behind buffer, bytes per console.
                         -> (1.2.8b9: 4096 -> 16384, so a paced flush
                         -> can pool several screens of a burst)
@@ -549,6 +549,15 @@ OBJECT console
   breakarg                      -> 1.3.1b1: CHANGE_SIGNAL's last arg2 (a
                                 -> port), its res2; at the end so the C
                                 -> engine's offsets stay where they were
+                                -> 1.3.1b2: also the last reader's port
+  rdtask                        -> 1.3.1b2 (Audit9 K1/K2): who gets Ctrl+C..F,
+  wrtask                        -> as stock does it - the last READER (or
+                                -> CHANGE_SIGNAL's target) and the last
+                                -> WRITER, both signalled, each forgotten
+                                -> at its own ACTION_END and checked alive
+                                -> before every Signal(). breaktask stays
+                                -> the "who last used this console" claim
+                                -> for lookups only.
 ENDOBJECT
 
 DEF p96base=NIL,                -> 1.2.8b8: Picasso96API.library
@@ -1826,7 +1835,7 @@ ENDPROC
 -> (conbysender). curcon is set at exactly these boundaries.
 PROC dopkt(pkt:PTR TO dospacket)
   DEF len, old, id:PTR TO infodata, zp:PTR TO LONG, i, sender:PTR TO mp,
-      c:PTR TO console, bn:PTR TO ln, bp:PTR TO mp
+      c:PTR TO console, bn:PTR TO ln, bp:PTR TO mp, t:PTR TO tc
   -> 1.2.8b9: the common write, accepted by the C engine (wacc in
   -> engine.c: the conditions under which dowrite's accept is a pure
   -> copy-and-reply); anything else takes the E path below, unchanged
@@ -1853,6 +1862,9 @@ PROC dopkt(pkt:PTR TO dospacket)
     curcon := c
     flushout(c)                 -> S5: last output lands before close
     c.opens := c.opens - 1
+    -> 1.3.1b2 (Audit9 K1): the closing task stops being a break target,
+    -> so a finished `run list` is never Signal()led from Ctrl+C
+    breakforget(c, porttask(pkt.port))
     -> b11 safety net: a client that DIED on the alternate screen
     -> (Ctrl+C'd More) never sends ?47l - its closing handle
     -> restores the transcript instead of leaving it lost forever
@@ -1864,6 +1876,9 @@ PROC dopkt(pkt:PTR TO dospacket)
     IF c.opens <= 0
       c.opens := 0
       c.breaktask := NIL
+      c.rdtask := NIL
+      c.wrtask := NIL
+      c.breakarg := NIL
       IF c.win
         IF c.waitmode = FALSE   -> stock CON: semantics: the window
           conclose(c)           -> dies with its last handle; WAIT
@@ -1903,6 +1918,10 @@ PROC dopkt(pkt:PTR TO dospacket)
     ensurewin()                 -> an AUTO window appears on read too
     sender := pkt.port          -> the reader owns the break signal now
     curcon.breaktask := sender.sigtask -> (the AROS con-handler does the same)
+    -> 1.3.1b2 (Audit9 K2): a READ is what may take the break back from a
+    -> CHANGE_SIGNAL target - a write no longer can
+    curcon.rdtask := porttask(sender)
+    curcon.breakarg := sender   -> K12: res2 is a port, the reader's
     IF curcon.rdn < RDMAX
       curcon.rdq[curcon.rdn] := pkt           -> queue it; a finished line replies it
       curcon.rdn := curcon.rdn + 1
@@ -1984,7 +2003,10 @@ PROC dopkt(pkt:PTR TO dospacket)
     ENDIF
     ReplyPkt(pkt, DOSTRUE, 0)
   CASE ACTION_CHANGE_SIGNAL
-    c := conbysender(pkt, TRUE)
+    -> 1.3.1b2 (Audit9 K11): arg1 is the handle's fh_Arg1 - our console
+    -> pointer - when the caller passes it; route by sender only if not
+    c := pkt.arg1
+    IF conok(c) = FALSE THEN c := conbysender(pkt, TRUE)
     IF c = NIL
       ReplyPkt(pkt, DOSFALSE, ERROR_OBJECT_NOT_FOUND)
       RETURN
@@ -1997,13 +2019,29 @@ PROC dopkt(pkt:PTR TO dospacket)
     -> a port ORs the break bit into its message list, and the console
     -> lookup by task (conbysender) never matched. Take the port's
     -> sigtask; a task or process given directly is kept as it is.
-    old := IF curcon.breakarg THEN curcon.breakarg ELSE curcon.breaktask
+    -> 1.3.1b2 (Audit9 K2): the target is the READER half of the break
+    -> pair and stays until the next READ - writes no longer move it, so
+    -> csh's relay keeps Ctrl+C while the pipe's last stage prints.
+    -> K12: res2 is always a port (a process's own pr_MsgPort when no
+    -> port was ever given), never a bare task.
+    old := curcon.breakarg
+    IF old = NIL
+      t := curcon.rdtask
+      IF t = NIL THEN t := curcon.breaktask
+      IF t
+        IF taskalive(t)
+          IF t.ln.type = NT_PROCESS THEN old := t + 92   -> pr_MsgPort
+        ENDIF
+      ENDIF
+    ENDIF
     IF pkt.arg2
       bn := pkt.arg2
       IF bn.type = NT_MSGPORT
         bp := pkt.arg2
-        IF (bp.flags AND PF_ACTION) = PA_SIGNAL THEN curcon.breaktask := bp.sigtask
+        curcon.rdtask := porttask(bp)
+        IF curcon.rdtask THEN curcon.breaktask := curcon.rdtask
       ELSEIF (bn.type = NT_TASK) OR (bn.type = NT_PROCESS)
+        curcon.rdtask := pkt.arg2
         curcon.breaktask := pkt.arg2
       ENDIF
       curcon.breakarg := pkt.arg2
@@ -2113,6 +2151,7 @@ PROC dowrite(pkt:PTR TO dospacket)
   ENDIF
   sender := pkt.port            -> the writer owns the break signal too:
   curcon.breaktask := sender.sigtask   -> `list >CCON:` is opened by the SHELL,
+  curcon.wrtask := porttask(sender)    -> (1.3.1b2: the writer half of it)
                                 -> but the WRITEs come from list itself -
                                 -> this line is what makes Ctrl+C reach it
                                 -> (AROS con-handler does the same)
@@ -2326,6 +2365,7 @@ PROC swaccept()
         curcon := c2            -> the accept-time state resets, exactly
         sender := pkt.port      -> dowrite's: break owner (packet-side,
         c2.breaktask := sender.sigtask  -> stays here), then the bundle
+        c2.wrtask := porttask(sender)
         acceptreset()
         CopyMem(pkt.arg2, c2.wob + c2.wolen, pkt.arg3)
         c2.wolen := c2.wolen + pkt.arg3
@@ -3099,6 +3139,7 @@ PROC dofind(pkt:PTR TO dospacket)
   c.opens := c.opens + 1
   sender := pkt.port
   c.breaktask := sender.sigtask -> opener gets Ctrl+C..F by default
+  c.wrtask := porttask(sender)  -> (1.3.1b2: until a writer or its END)
   ReplyPkt(pkt, DOSTRUE, 0)
 ENDPROC
 
@@ -10433,9 +10474,15 @@ PROC dovanilla(code, qual)
     curcon.eofpend := TRUE
     satisfyreads()
   ELSEIF (code >= 3) AND (code <= 6)
-    -> Ctrl+C..F: forward the break to the current break owner
-    IF curcon.breaktask
-      Signal(curcon.breaktask, Shl(SIGBREAKF_CTRL_C, code - 3))
+    -> Ctrl+C..F: forward the break to the reader and the writer
+    -> (1.3.1b2, Audit9 K1: only to tasks exec still lists), and a
+    -> break also stops a pending paste, as on stock
+    sendbreak(curcon, Shl(SIGBREAKF_CTRL_C, code - 3))
+    IF curcon.pasteq
+      IF StrLen(curcon.pasteq) > 0
+        SetStr(curcon.pasteq, 0)
+        drawedit()
+      ENDIF
     ENDIF
   ELSEIF code = 27
     -> Esc abandons the WHOLE pending paste, not just the visible
@@ -11252,6 +11299,61 @@ PROC tcclient()
   IF t = NIL THEN RETURN NIL
   IF t.ln.type <> NT_PROCESS THEN RETURN NIL
 ENDPROC t
+
+-> 1.3.1b2 (Audit9 K1): the task behind a reply port - only a PA_SIGNAL
+-> port has one (PA_SOFTINT keeps an Interrupt in mp_SigTask, PA_IGNORE
+-> nothing worth trusting)
+PROC porttask(p:PTR TO mp)
+  IF p = NIL THEN RETURN NIL
+  IF (p.flags AND PF_ACTION) <> PA_SIGNAL THEN RETURN NIL
+ENDPROC p.sigtask
+
+-> 1.3.1b2 (Audit9 K1): t closed a handle - it stops being a break target
+PROC breakforget(c:PTR TO console, t)
+  IF t = NIL THEN RETURN
+  IF c.rdtask = t
+    c.rdtask := NIL
+    c.breakarg := NIL
+  ENDIF
+  IF c.wrtask = t THEN c.wrtask := NIL
+ENDPROC
+
+-> 1.3.1b2 (Audit9 K1/K2): Ctrl+C..F to the reader and the writer, each
+-> once and only while exec still lists it; with neither alive, the task
+-> behind the first queued READ (the prompt that is waiting), then the
+-> last user of the console
+PROC sendbreak(c:PTR TO console, sig)
+  DEF a, b, sent=FALSE, pkt:PTR TO dospacket
+  a := c.rdtask
+  b := c.wrtask
+  IF a
+    IF taskalive(a)
+      Signal(a, sig)
+      sent := TRUE
+    ENDIF
+  ENDIF
+  IF b AND (b <> a)
+    IF taskalive(b)
+      Signal(b, sig)
+      sent := TRUE
+    ENDIF
+  ENDIF
+  IF sent THEN RETURN
+  IF c.rdn > 0
+    pkt := c.rdq[0]
+    a := porttask(pkt.port)
+    IF a
+      IF taskalive(a)
+        Signal(a, sig)
+        RETURN
+      ENDIF
+    ENDIF
+  ENDIF
+  a := c.breaktask
+  IF a
+    IF taskalive(a) THEN Signal(a, sig)
+  ENDIF
+ENDPROC
 
 -> Audit8 J13: is t a live task? exec's ready and waiting lists, under
 -> Forbid (execbase+406 TaskReady, +420 TaskWait - the module is not
@@ -12829,6 +12931,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1b1 (14.10.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.1b2 (24.10.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'
