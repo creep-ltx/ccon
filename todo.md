@@ -10,6 +10,18 @@ ROM option table). The renderer, the 4000-line scrollback model,
 the line editor and the scroll keys were already built and
 boot-tested in CTerm 0.1 (commit 71e29b1) — they transplant in.
 
+## NEXT: Audit9 + the 3.1 console study (24.10.26)
+
+- **Audit9** (end of `audit.md`, vs 1.3.1b1): K1-K30 + T1-T6. Fix first, as one
+  break-owner rework: K1 (Ctrl-C can Signal() a task that has exited), K2, K12;
+  then K3, K5, K6, K4, K7+K8, K9+K10.
+- **What 3.1's console teaches CCON:** `~/Projects/Knowledge/amiga/aos31-study/ccon.md`
+  (clean room - work from that note and the public autodocs, never from the
+  3.1 source). Top 10: packets 2001-2004 (ARexx PUSH/QUEUE), break signals
+  (the same bug as K1), CUP clamp to cols-1, 25 CSI parameters, CSI 2J, DISK_INFO
+  the stock way, raw repeat drop, single-byte controls, modes/SGR, window opening.
+  The note's break-signal item and Audit9 K1/K2 overlap: fix them together.
+
 ## FIXED in 1.3.1b1 (14.10.26) - found from CTerm (10.10.26)
 
 **ACTION_CHANGE_SIGNAL's arg2 is a MESSAGE PORT, not a task.**

@@ -1238,3 +1238,412 @@ J4 (one-liners, high reach); J3, J5, J10, J14 (small); then the
 then J6/J17 (clip and re-check under the lock); then the rest.
 Extend fxdiff with split sequences and a `cfout` driver so J1's class
 is caught by the harness next time.
+
+---
+
+# Audit9 — the 1.3.x delta and whole-file sweeps (24.10.26, vs 1.3.1b1 @2afa279)
+
+Read-only pass over `$VER: ccon-handler 1.3.1b1 (14.10.26)`: the delta
+since Audit8's baseline 0e45b7b (the Audit8 fix batches b13–b17,
+1.3.0b18's hidden-entry pen and J23 retranslate, 1.3.0, 1.3.1b1's
+CHANGE_SIGNAL fix), then three parallel whole-file sweeps (packet
+protocol and lifecycle; bounds, parsing and UI state; the C engine,
+asm and the E↔C contract), then the ledger and the docs. Every
+finding below was re-checked against the cited lines before it was
+written down. Nothing in the source was changed. Clean-room: nothing
+under `~/Projects/research/` was read.
+
+Rebuilt in /tmp as a baseline: `engine.bin` (19752), `con.h`,
+`conoffs.i` and `ccon-handler` (163564, `ecompile … LARGE ADDBUF=1`)
+are **byte-identical** to the committed ones; fxdiff (`vamos -C 68020
+-m 8192`) gives 7200 chunks, **0 mismatches**, on four seeds (default,
+7, 12345, 999), split-sequence mode included; `tests/syncheck.py`: 0
+drifted copies. The engine itself came out clean again — the findings
+are in the E handler's packet and window lifecycle, the line editor
+and the parser.
+
+Fresh series **K1..** for code and maintenance, **T1..** for docs and
+tests drift (the letters I, K, N, Q, R, T, U, Y, Z were unused).
+Confidence: **C** = confirmed by tracing, **P** = plausible, not
+reproduced.
+
+## Findings — fix before the next release
+
+**K1 — Ctrl+C can Signal() a task that has exited.** *(crash /
+corruption, C — pre-existing)*
+`dovanilla` 10436-10439: `Signal(curcon.breaktask, …)` with no liveness
+test. `breaktask` is overwritten by every READ (1905), WRITE (2115,
+`swaccept` 2328, engine.c `wacc`) and open (3101), and cleared only
+when the last handle closes (1866). Everyday trigger: `run list` in a
+shell. The shell writes its prompt and queues its READ (breaktask =
+shell); `list` writes (breaktask = list); `list` exits — its END does
+not touch breaktask because `opens` is still > 0; the user presses
+Ctrl+C at the prompt and `Signal()` writes `tc_SigRecvd` of a freed
+Task, and if the freed `tc_SigWait`/`tc_State` happen to match, Exec
+re-links "it" into TaskReady. J13 added `taskalive()` (11260) for
+Alt+Tab only; the Ctrl+C path, the older and commoner one, never got
+it. A reply port in PA_SOFTINT mode has an Interrupt, not a Task, in
+`mp_SigTask` — the same hole. Fix shape: `taskalive(breaktask)`
+before the Signal, falling back to the head reader's task; at
+ACTION_END, revert `breaktask` when it is the closing sender's task;
+only take `mp_SigTask` from PA_SIGNAL ports.
+
+**K2 — the 1.3.1b1 CHANGE_SIGNAL target is undone by the next write.**
+*(wrong behaviour, C)*
+1990-2010 sets `breaktask` from the port, but the next WRITE from any
+task (2115, 2328, engine.c:1166), READ (1905) or open (3101) replaces
+it. The 1.3.1b1 proof was `Wait 30 | cat`, whose last stage writes
+nothing. With `list sys: all | cat`, cat's writes move the break to
+cat and csh's relay task never sees Ctrl+C — the pre-1.3.1b1 symptom
+back for every pipe that prints. The Guru Book (21.2.4.3, via
+amigados-handlers.md) and CTerm's policy: the CHANGE_SIGNAL target
+stays; a READ may replace it; a writer takes the break only while
+nobody is set. Fix shape: a `breakset` flag set by CHANGE_SIGNAL with a
+non-zero arg2, cleared by READ (and by a CHANGE_SIGNAL back to the
+shell); WRITE/`wacc`/`swaccept` set `breaktask` only when it is clear.
+(Couple with K1: the stored target must still be checked alive.)
+
+**K3 — input events still in the ring run against a console that
+hidewin has just closed, and paint through `rp = NIL`.** *(crash, C
+path / narrow trigger)*
+`hidewin` (4157-4222) sets `armed`, `win`, `rp` to NIL but does not
+scrub the ring's `e.con` tags, as `conclose` does (1722-1727);
+`ihdrain` (10978-10997) checks only `conok(c)`. RA+I is handled inside
+the drain (`ihkey` → `doiconify`), so any key or wheel tick captured
+behind it in the same drain reaches the hidden console: wheel or
+Shift+Up → `scrollview` (6675) → `redraw` → `drawmrow` on rp NIL;
+Tab → `tcmenudraw` → `SetAPen/Text` on NIL (rp->FgPen lands at address
+25, in the exception vectors). `redraw`/`scrollview` guard only `sb`,
+which hidewin keeps. The handler is likeliest to lag behind the ring
+while output streams. The Workbench-close hide (snmsg) has the same
+shape with a smaller window. Fix shape: scrub `e.con = c` in hidewin,
+or skip slots whose console has `win = NIL` in ihdrain (nested IFs —
+E's AND does not short-circuit).
+
+**K4 — the window pointer DISK_INFO hands out outlives hidewin.**
+*(corruption / crash, P — since 1.2.6's iconify, widened by b9)*
+DISK_INFO puts `curcon.win` in `id_VolumeNode` (2042); the comment at
+2014 says Ed's menu strip and More's retitle "both hang off this
+pointer", and processes that take `pr_WindowPtr` from it keep it for
+DOS requesters. `doiconify` (RA+I, the iconify gadget) and `snmsg`'s
+Workbench close call `hidewin`, which CloseWindow()s it; `reopenwin`
+opens a new window, possibly at another address, and nothing fixes
+those pointers. Ed's ClearMenuStrip at exit, More's SetWindowTitles,
+or a "please insert volume" requester then use freed memory. The 1.2.6b4
+boot run "gadget over Ed parks and restores … no guru" (todo.md 4314)
+is consistent with the new window landing at the old address
+(first-fit, same size) and proves nothing on an MMU-less machine; Ed's
+menus are also simply gone on the new window. Test: Ed, iconify,
+restore, try Ed's menus; then quit Ed under MuForce/Mungwall in
+FS-UAE. Fix shape: refuse iconify while `rawmode` (as CTerm refuses a
+screen switch while a console is raw, amigados-handlers.md); for the
+Workbench close, which cannot be refused, walk TaskReady/TaskWait under
+Forbid and set `pr_WindowPtr = oldwin` to NIL, back to the new window
+on reopen; write the Ed/More limit into ccon.doc.
+
+**K5 — Return commits a line into the input queue with no room check;
+a full queue keeps half a line and glues the next command onto it.**
+*(wrong behaviour / data integrity, C)*
+`dovanilla` 10404-10407: `FOR j … enqueue(s[j])` then `enqueue(10)`;
+`enqueue` (12780) silently drops on full (`INQMAX` 2048). Trigger:
+Shift+RA+V (or PASTEEXEC) with a 6 KB script — `dopaste` feeds every
+byte through `dovanilla` with no packets served in between; the queue
+fills inside line k, the rest of k and its LF are dropped, every later
+line is echoed but lost, and the queue ends in an unterminated piece of
+k. The user's next command is appended to it (`delete ram:` + whatever
+comes next). Type-ahead of long lines while a command runs hits the
+same path more rarely. The raw paste path already detects this
+(`trunc`). Fix shape: `IF inqroom(l + 1) = FALSE` → beep and keep the
+line in `ebuf` uncommitted; stop `dopaste`'s exec loop at the first
+refused commit.
+
+**K6 — the 8-bit OSC introducer $9D swallows UTF-8 text.** *(wrong
+output, C — E and C alike)*
+`renderx` 9091-9093 (`c = $9D` → `oscstart`) and engine.c:746; the OSC
+body (9045-9063) eats every byte, LF included, until BEL, $9C or ESC \.
+UTF-8 ” is E2 80 9D and “ is E2 80 9C: `type README` with curly quotes
+goes blank at the first ”, and the next “ ends the "OSC" and retitles
+the window with the swallowed text. Stock console.device has no $9D
+OSC. (The $9B CSI introducer has the same UTF-8 clash — `ś` is C5 9B —
+but matches stock behaviour; note only.) Fix shape: drop the $9D
+introducer (keep `ESC ]`) in both E and C, or at least end the OSC
+body on any C0 control; regenerate fxdiff.
+
+**K7 — after a shrink the edit line can be taller than the grid;
+drawedit mirrors it into ring rows below the screen and paints it
+over the border.** *(scrollback corruption / wrong output, C by
+reading)*
+`drawedit` 9512-9530: the mirror loop runs `r := ancy …` with no
+`r <= rows-1` guard (CopyMem to `visrow(r)`, `slfull(r)`, `Text` at
+row r; the blip read at 9587 likewise). `edroom` (9206) gives up at
+`ancy = 0`; `edcap()` is only applied on typing/recall/completion;
+`doresize`/`regrid`/`reopenwin` never trim `ebuf`. Scenario: a
+300-character command in 80x23, then drag to the 160x60 minimum
+(~18x5): ~11 extra rows land in ring slots `sbtop+5…` — on a full ring
+the oldest history — and the guarded erase loops never clear them:
+phantom editor text in history for good. Heap writes past the ring
+need `r >= sbmax` (a cols 2-4 borrowed window or a ring cut to rows+2,
+P). Fix shape: after `edroom`, if `edlastrow(l) > rows-1` trim `ebuf`
+to `edcap()` and clamp `cpos` (once in `regrid` and after `reanchor`);
+guard the mirror loop with `r <= rows-1`.
+
+**K8 — the Tab menu can be placed below the grid, and long names paint
+past the right edge.** *(wrong output, C)*
+`dotab` 12755-12760: the make-room loop stops at `ancy = 0`, but
+`tcmrow0 := edlastrow + 1` and `tcmrows` (clamped only to `rows-1` in
+`tcmenucalc` 12466) are kept. A fresh NewShell in a 10-row window, an
+85-character line (2 rows), `c:<Tab>` with 80 candidates: tcmrows 9,
+menu rows 2..10 — row 10 is the bottom border, and `tcclose` →
+`drawmodelrow(10)` paints an off-grid ring row there. And `tcmcolw` is
+capped to `cols` (12465) but `tcmenudraw` still draws `l` characters
+(12500): a 40-character name in an 18-column window crosses the right
+border, which `tcclose` never restores. Fix shape: `tcmrows :=
+Min(tcmrows, rows-1-edlastrow)` after the loop (0 rows → NOTABMENU's
+cycle); clip `l` to the column width.
+
+**K9 — an AUTO console whose window fails to open hangs its readers.**
+*(hang, C path / rare trigger)*
+openwin's failure arm (4489-4492) leaves `autopend := FALSE` with
+`win = NIL`; ACTION_READ (1882-1898) then queues reads that no input
+or EOF can ever satisfy (writes already fail -1). Fix shape: in READ,
+`win = NIL` and not `autopend`/`appicon`/`wbgone` → reply -1 /
+ERROR_NO_FREE_STORE.
+
+**K10 — J9's reopen-failure half is still open.** *(hang, C)*
+`snmsg` 3290-3297: a failed `reopenwin` leaves `wbgone` set until the
+*next* Workbench reopen — parked writers and readers wait with nothing
+retrying. `doappmsg` 3590-3598: the failed restore re-adds the AppIcon
+with `iconobj`, not `c.myicon` (ICON= lost, cosmetic); if
+`AddAppIconA` also fails the console is orphaned — no window, no icon,
+`wbgone` FALSE — and its `wq` writers are never replied (`flushwq` not
+called). Fix shape: retry on the flush timer, or fall back to
+closewin's replies (reads EOF, writes accept-and-discard); flushwq on
+the orphan arm; `myicon`.
+
+## Findings — smaller
+
+- **K11 CHANGE_SIGNAL ignores arg1.** (C, impact P) The Guru Book's
+  dp_Arg1 is the handle's `fh_Arg1`; CCON routes by sender
+  (`conbysender(pkt, TRUE)`, list-head guess included). A parent
+  sending it for a child's handle (CreateNewProc/SystemTags with
+  SYS_Input = another CCON window) retargets the parent's console, and
+  the guess can redirect a stranger's. Use `conok(pkt.arg1)` first.
+- **K12 CHANGE_SIGNAL's res2 can be a Task, and `breakarg` goes stale.**
+  (C, hygiene) Before any CHANGE_SIGNAL, `old` (2000) is `breaktask`, a
+  Task where callers expect a port (csh reads res2 as one); `breakarg`
+  is never cleared when READ/WRITE move the break or at the last END,
+  so a later query returns a port that no longer is the target. Return
+  `pr_MsgPort` for a process; clear `breakarg` where `breaktask` moves.
+- **K13 A second `?47h` while the alternate screen is up throws the
+  transcript away.** (C by reading, trigger P) 8296-8301 → `altsave`
+  begins with `altdrop()`: the client's own page becomes "the
+  transcript" restored at `?47l`. xterm treats it as a no-op: `IF
+  altvalid = FALSE THEN altsave()`.
+- **K14 J23's retranslate skips the alt snapshot.** (cosmetic, C)
+  `retranslate` (4224-4249) walks only `sa`; with More/Ed up during a
+  Workbench mode change, `alta` keeps the old pens with bit 7, and
+  `altpop` copies them back on `?47l` — or, on a changed grid, right
+  after retranslate in `reopenwin` (4369-4377). Run the same map over
+  `alta` when `altvalid`. Also (P): a cell that fell back to a raw pen
+  loses bit 7 and is never translated again on a later palette.
+- **K15 Every OSC number retitles, not just 0/1/2.** (C) 9053-9056 skip
+  any digits and the first `;`: OSC 8 hyperlinks set the title to
+  `;url` then `;`; OSC 7/4/52 (common over ssh) retitle too. The
+  comment says only 0-2. Collect the number; title only for 0-2.
+- **K16 A field-4 title beginning "Screen" or "Font" is taken as an
+  option.** (C) `parseopt`'s SCREEN (2568-2582) and FONT (2795-2808)
+  prefixes match with one following character; the comment's own
+  example (2980-2983, "Screensaver-log" becomes the title) is false —
+  it sets `pscrname = "saver-log"`, no title, silent fallback screen;
+  "Fonts"/"FontEdit" override a ccon.cfg FONT=. At field 4, accept
+  only the `=` forms.
+- **K17 ACTION_END restores the alternate screen on any handle's
+  close.** (P) 1856-1863 has no owner test: a `run` job's handle
+  closing while More/Ed is up snaps their page back to the transcript
+  under them. Restore only on the END of the task that entered alt.
+- **K18 A hidden WAIT window dies at its last close.** (C, low)
+  1864-1873 tests `c.win` only: an iconified or Workbench-hidden WAIT
+  console is conclosed (icon removed, contents lost). Linger when
+  `win OR appicon OR wbgone`.
+- **K19 Content search can scroll past the history.** (cosmetic, C)
+  `sbfind` searches to `sbcnt + rows - 1` (9865) and sets `viewoff :=
+  v` (9877) uncapped: blank or wrapped live rows on top, a title of
+  "[scrollback -v]" beyond the real history. `Min(v, sbcnt)` with the
+  highlight row offset.
+- **K20 J13's check has a time-of-check gap; the C: locks are borrowed.**
+  (P) `tcclient` tests `taskalive` once; `tcscancmd` then walks
+  `cli → commanddir → pathnode` (12150-12164) across `fscall`s that
+  Wait — a running (not reading) breaktask client can exit meanwhile;
+  `tabreq`'s `lockpath(proc.currentdir)` likewise. The J21 extra C:
+  locks (12136-12159) and `tcresolve`'s first one are used after
+  `UnLockDosList` without DupLock (an `Assign C: x REMOVE` race). And
+  `taskalive` walks under Forbid only: an interrupt's Signal() can move
+  the node it stands on to TaskReady — the walk still terminates, but
+  can miss (false negative, harmless). Audit8's first option stands:
+  CLI-dependent completion only while a read is queued.
+- **K21 Packets after ACTION_DIE.** (P, very rare) The drain (1172-1175)
+  keeps dispatching after DIE sets `dieing`: an open queued behind DIE
+  builds a console killhandler never tears down; packets arriving after
+  the last GetMsg are never replied. Refuse them once `dieing`; drain
+  `port` last in killhandler.
+- **K22 diskhelper signals without Forbid.** (P, very rare) 3184:
+  unlike `aslhelper` (3437), it Signals and still runs its epilogue
+  and the poked stub from the handler's memory; a DIE reaching
+  killhandler and exit before the helper runs again leaves it
+  executing freed code. `Forbid()` before the Signal, as aslhelper.
+- **K23 J24's fallback trades a stray write for a hang.** (P) A
+  PA_IGNORE `snport` never replies a later notice; screennotify waits
+  for replies before letting the Workbench close, so the next
+  CloseWorkBench caller would block. Better: refuse ACTION_DIE while
+  `snrem()` fails, so killhandler never runs registered.
+- **K24 `reopenwin`'s `changed` is computed before the ring clamp.**
+  (cosmetic, C) `gridcalc` (4368) does not apply `rows <= sbmax-2`;
+  `regrid` does. A window taller than its ring (small LINES, tall
+  window) therefore reads "changed" on every restore: alt snapshot
+  popped and re-saved, SIZEWINDOW reported, Ed's page replaced by the
+  transcript until the client repaints — the "unchanged grid = nothing
+  to do" promise of the J9 comment broken. Compare after the clamp.
+- **K25 `ppsetup` accepts a NULL plane.** (P) 7553-7555 reject `planes[p]
+  AND 3` (catches the all-ones -1 plane) but not NIL, the all-zeros
+  trick: on such a custom screen pm/pm1 and `dprowp` write at
+  `ay*bpr` in low memory. Reject NIL too.
+- **K26 The obscured test relies on `ClipRect.lobs` alone.** (P)
+  engine.c:1250 and E 7505-7508 do not test the ClipRect's own BitMap
+  (`cr+12`); lobs is layers' business on 3.1, unconfirmed for 3.2's
+  rewritten layers. Adding `*(LONG*)(cr+12) == 0` costs nothing.
+- **K27 Hygiene bundle** (all C by reading, low):
+  `loadhistfile` (11490-11500) keeps CR and control bytes (a PC-edited
+  history recalls `dir\r`); ESC/$9B in a recalled line or a completed
+  filename are interpreted by `render(ebuf)` at commit (10403) — filter
+  <32 and $80-$9F on load and insert. CSI parameters past four
+  overwrite `cpar[3]` (9073-9075, C the same): `38;2;255;128;0m` ends
+  in 0 and resets SGR, `38;5;31m` sets red — skip 38/48
+  sub-parameters. ESC/CAN/SUB do not abort a CSI (`ESC[31` +
+  `ESC[0m` prints `0m`); ESC + anything but `\` in an OSC eats that
+  byte. `shineok` 12380 / `hidpen` 12415 `Shl(1, depth)` is 0 at depth
+  32 (P: GetBitMapAttr reads 8 on the user's P96 screen) — cap at 8.
+  PASTEEXEC routes every byte through `dovanilla`: a pasted Tab
+  completes, a pasted ESC wipes the line. `sendcpr` (8641) reports
+  cols+1 at the pending wrap; a TAB at `cx = cols` wraps and then
+  spaces (9105, engine.c 731). WAIT_CHAR res2 is 0 where the Guru Book
+  gives the queued line count. Stale AppMessages pass `conok()` when a
+  new console lands at the old address. `jsettle` on a hidden console
+  clears `jslk` then returns at `win = NIL` (6891-6897), and a pending
+  slide-back is likewise dropped when `?47h` arrives (J22 did not
+  reach that case; same end result as before, no regression).
+  ACTION_FORCE/QUEUE (ARexx) fall to DEFAULT.
+
+## Maintenance
+
+- **K28 genstruct.py lays out CHAR fields differently from E-VO.**
+  (latent, C — measured with a probe under vamos) genstruct.py:28/:35
+  round every field, CHAR and ARRAY OF CHAR included, to even and never
+  round the total. E-VO packs bytes, aligns only INT/LONG/PTR and
+  rounds the size to even (`a:CHAR,b:CHAR,c:LONG,…` = 0,1,2,…; a
+  planted `xa:CHAR, xb:CHAR` before `breakarg`: genstruct 4228, E
+  4226). build.sh would then demand the wrong FXCONSIZE, the run-time
+  `SIZEOF console <> FXCONSIZE` test (8743) would switch the engine off
+  silently, and a mid-object CHAR pair shifts every CON_* after it. An
+  embedded OBJECT member is counted as a LONG. Today's OBJECT has only
+  byte arrays that are multiples of 4, so it is right. Fix: E's rules,
+  and assert on unknown types. (Worth a line in
+  Knowledge/amiga/amiga-e-language.md's OBJECT rules.)
+- **K29 Hand-agreed offsets build.sh does not check** (all agree today,
+  by reading): pgroups.s FX_DFFULL..FX_DFX1 (1555-1561), PM_*
+  (806-824), PF_* (169-185), SOFF=272, the TMP_* layout against the
+  16384-byte `ptmp` (E 7558), the `pctx[0..16]` (E 7578-7594) and
+  `fxtab[0..31]` (E 8711-8742) orders, `dfdb` 512 = 2×DFROWS, `dgl`
+  8192. `_Static_assert(offsetof…)` in engine.c and greps in build.sh.
+  J29's "probe the last field" is still open: `fcheck` stops at
+  `osct[83]`.
+- **K30 Local litter:** the untracked `engine/fxdiff.e`/`fxdiff` were
+  built from the pre-1.3.1b1 handler (FXCONSIZE 4220); `mkdiff.py`'s
+  docstring (line 10) omits `-m 8192`. `abfill/abcopy/PFILL` use `dbra`
+  on n/4-1, so n < 262148 — fine for wacc's 16384, worth a comment.
+
+## Ledger
+
+- **Audit8 J1–J31, against 1.3.1b1:** present as described — J1 (cfout
+  `cesc` bail), J2 (`ardone(msigs)`), J3 (`dgsync` in dpaint and
+  ppsetup), J4 (`us - Mul(secs, 1000000)`), J5 (re-clamp in `regrid`),
+  J6/J17 (fit + position under the lock, E `dpfits` and C cflush
+  1256-1269, offsets checked), J7 (`tcdrop` in hidewin), J8 (`pkey[0]`
+  cleared in main, gridcalc, hidewin, closewin), J10, J11, J12, J14 (E
+  and C), J15, J16, J18, J19, J20 (parity traced on `"a*`, `"a**`,
+  `"a*"*`), J21, J23 (both halves), J25, J26, J27 (not reproduced,
+  withdrawn), J29/J30 (build.sh checks each shown failing on a plant:
+  .data, .rodata, string literal, COMMON, .bss, FXCONSIZE, WOBSZ, an
+  OBJECT change), J31 (entry 32 = moveq/rts, table offsets match every
+  fcall). **Partial:** J9 — the reopen-failure half (K10); J13 — the
+  time-of-check gap (K20); J22 — alt-screen entry (K27); J24 — the
+  replacement hazard (K23); J29 — the last-field probe (K29). J28
+  unchanged (harmless, as written).
+- **audit3 C2 (the sbcols belt):** removed by J9 in favour of `regrid`.
+  The stride invariant it guarded now holds by construction: `sbcols`
+  is written at both allocation sites (4683, 5089), `cols` changes only
+  in gridcalc/regrid, and every column change goes through
+  `reflowring` or disposes all four planes. `retranslate` uses
+  `sbmax*sbcols`. Holds.
+- **audit5 A2 (DISK_INFO NIL guard), A1 (no close inside the UserPort
+  drain), C3 (`conok` on AppMessages), B5 (DIE refusal), D1 (negative
+  length) and Audit6 F1:** still present. Note for A1: RA+I is handled
+  inside the *input-ring* drain, which is K3's opening, not A1's.
+- **Still open from earlier audits, unchanged:** audit2 P6 (fscall
+  timeout, parked — J21's early stop reduces its exposure on Path
+  scans), audit3 P3/P4 (parked), C5 tail-pump (documented), C6
+  (deliberate). The audit3 P1 wheel-redraw row was not re-measured.
+
+## Docs and tests drift
+
+- **T1** `changelog.md` header: "1.3.0 is built" — it is released,
+  tagged `ccon-1.3.0` and on Aminet.
+- **T2** `README.md` 260: release archive `ltx-cc130.lha` "on Aminet"
+  — the Aminet pair is `ltx-ccon.lha`/`.readme` (todo.md 7012-7016);
+  ltx-cc130 is the GitHub name.
+- **T3** `tests/README.md` does not mention `boldtest` (the J27 pixel
+  check).
+- **T4** No harness covers CHANGE_SIGNAL, `retranslate` or `shineok`
+  (hidpentest copies `hidpen` only). The 1.3.1b1 proof (`Wait 30 |
+  cat`) cannot see K2; add a pipe whose last stage writes.
+- **T5** `ccon.doc` (~978-1000) promises iconify "from a shell prompt
+  and from a fullscreen program like Ed alike" — K4's caveat until it
+  is fixed or refused.
+- **T6** `ccon.doc`, `ccon.readme`, `README.md` say 1.3.0 while the
+  source is 1.3.1b1 — expected for a beta; the CHANGE_SIGNAL fix is in
+  changelog.md only.
+
+## Verified clean (highlights)
+
+Reproducible binaries (above) and fxdiff 4×7200/0; every hard-coded
+system offset in engine.c (RastPort, Layer, ClipRect, Window borders,
+mp_SigTask, pr_CLI/cli_StandardInput/fh_Args, AttnFlags) and the
+library LVOs the asm calls; every entry into engine.bin gated by
+`fastok` (020 + size + fcheck); C paints planar only, RTG goes through
+E's dpaint; the cflush -1 path leaves model and marks intact and E
+repaints; attr bit 7 agrees between E and C `curattr` and every
+reader masks it or indexes a 256-entry table; anstab capped at 15, bg
+≤ 7. `dopkt` replies exactly once on every arm, queue-full arms
+included; closewin replies rdq/wcq/wq; timer pairing and the J4 split;
+pen, AppWindow/AppIcon, gadget, font, lock and model lifecycles;
+Forbid sections never Wait; stack (deepest ~2 KB vs E's 10000-byte
+stack, no recursion). CSI parameters clamped (999, `cnp ≤ 3`), OSC
+title ≤ 80, every CSI final bounded, ring index wraps, reflow, config
+token caps, drag-and-drop buffers, completion list and name buffers,
+`shineok`/`pendist` pen ranges, tiny-window floors.
+
+## Verdict
+
+The engine is done being the risk: reproducible, fxdiff-clean, and its
+seams with E (Audit8's whole story) hold. The trouble has moved to two
+places. First, **who owns the console's references across time** —
+the break target (K1, K2, K12), the window pointer handed to clients
+(K4) and the input ring's console tags (K3) all outlive the thing they
+point at; hidewin is still the lighter cousin of closewin (K3, K10,
+K18). Second, **the line editor and parser trusting their bounds
+implicitly** — the commit into the input queue (K5), the edit line and
+the Tab menu after a shrink (K7, K8), and the 8-bit OSC introducer
+meeting UTF-8 (K6). Suggested order: K1 + K2 + K12 as one break-owner
+rework (with a writing-pipe test, T4); K3 (a one-line scrub); K5, K6
+(small, high reach); K4 (refuse raw iconify, NIL the WindowPtrs);
+K7/K8 as one "fit the editor to the grid" piece; K9/K10; then the
+rest. K28 before anyone adds a CHAR field to OBJECT console.
