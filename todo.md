@@ -35,8 +35,11 @@ screen (More) refuses; K5's raw half (a raw-mode paste was still cut byte-wise).
 A1200 checks: ccsig ALL PASS, `Wait 30 | cat` broke in 3 s, iconify at a csh
 prompt works; conbench SCALE 20 SYNC in 800x400 windows (127x89 cells via
 ccon.cfg): 1.3.1b1 18.10 s, 1.3.1b2 18.12 s - the same, K26 costs nothing.
-**csh's own limit, not CCON's:** a paste over ~1 KB in csh still glues - csh's
-key queue (KQ 1024, src/term.c) drops keys silently when full, mid-line.
+**csh's limit, not CCON's - fixed in csh 0.1b14 (25.10.26):** csh's prompt
+asked for the cursor and bounds and read the pasted lines waiting before the
+answer into its 1024-key queue, which dropped the rest mid-line. tests/rawdump
+showed CCON hands a raw reader 31 whole lines. csh 0.1b14 + CTerm 0.3b54 (same
+CHANGE_SIGNAL port fix) installed on the A1200 25.10.26, ccsig ALL PASS in CTerm.
 
 **Second batch (25.10.26), same 1.3.1b2:** K14 K17 K20 (completion only with
 a queued READ; the borrowed C: locks stay - DupLock would be DOS from the
