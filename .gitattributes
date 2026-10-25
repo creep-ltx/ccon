@@ -1,0 +1,5 @@
+# Amiga E sources: GitHub's default guess for .e is Eiffel
+*.e linguist-language=E
+# Amiga executables and the engine image - never text
+ccon-handler binary
+engine/engine.bin binary
