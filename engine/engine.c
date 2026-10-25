@@ -743,7 +743,7 @@ LONG frun(struct fx *x, const UBYTE *s, LONG i, LONG len)
             *x->dfpend = 0;
             *x->dfnarrow = TRUE;
             i++;
-        } else if (c == 0x9B || c == 0x9D) {
+        } else if (c == 0x9B) {                  /* $9D: dropped (Audit9 K6) */
             return i;
         } else {
             i++;                                 /* other controls: dropped */
@@ -1250,7 +1250,7 @@ LONG cflush(struct fx *x, struct pctx *pc)
     gcall_lock(gfx, ly, 0);
     PA(4, tw);
     cr = *(UBYTE **)(ly + 8);
-    if (!cr || *(UBYTE **)cr || *(LONG *)(cr + 8)
+    if (!cr || *(UBYTE **)cr || *(LONG *)(cr + 8) || *(LONG *)(cr + 12)   /* K26: cr's BitMap */
         || *(LONG *)(cr + 16) != *(LONG *)(ly + 16) || *(LONG *)(cr + 20) != *(LONG *)(ly + 20)
         || *(LONG *)(ly + 32)) {
         gcall_lock(gfx, ly, 1);

@@ -162,8 +162,8 @@ the real prompt comes back from the scrollback model:
   behind it (output pauses, then flushes on restore); double-click
   the icon and the window is back exactly as you left it —
   scrollback, a half-typed line, cursor and all. The icon is built
-  into the handler, and it works over a fullscreen client like Ed
-  too. (On pre-V47.4 systems the gadget doesn't appear; the key
+  into the handler. Over a fullscreen client like Ed or More it only
+  beeps: they keep the window's address. (On pre-V47.4 systems the gadget doesn't appear; the key
   always works.)
 - **Drag and drop**: drop Workbench icons on the window and each
   becomes its full path at the cursor as if typed —
@@ -257,8 +257,8 @@ design notes. A running handler keeps its seglist: after updating
 - `ccon.readme` — short-form readme for the release archive.
 - `ccon.doc` — the full plain-text manual (Amiga-width lines).
 - [`changelog.md`](changelog.md) — the version history, 0.1 to now.
-- Release archives (`ltx-cc130.lha` for 1.3.0) ship as GitHub
-  release assets and on Aminet, not in the tree.
+- Release archives ship as GitHub release assets and on Aminet
+  (`util/shell/ltx-ccon.lha`), not in the tree.
 - `tests/` — the Linux and Amiga harnesses (`tests/README.md`),
   including `syncheck.py`, which holds the harnesses' verbatim
   copies to the handler.

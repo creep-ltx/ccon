@@ -2,8 +2,11 @@
 """genstruct.py - the C mirror of ccon-handler.e's OBJECT console.
 
 E lays an OBJECT out in declaration order: an untyped field or a PTR is
-a LONG (4 bytes), NAME[n]:ARRAY OF X is n elements inline, and fields are
-word-aligned. Writes engine/con.h; the handler checks a few offsets at
+a LONG (4 bytes), NAME[n]:ARRAY OF X is n elements inline. E-VO packs
+bytes: CHAR fields and ARRAY OF CHAR start at the next byte, only INT,
+LONG and PTR (and arrays of them) go to an even address, and the size is
+rounded up to even (Audit9 K28, measured with a probe under vamos).
+m68k gcc lays out struct con the same way (2-byte alignment). Writes engine/con.h; the handler checks a few offsets at
 run time (fcheck) and keeps the C engine off if any disagree."""
 import re, sys
 src = open(sys.argv[1], encoding='latin1').read()
@@ -25,7 +28,8 @@ for line in body.split('\n'):
         m = re.match(r'(\w+)\[(\d+)\]:ARRAY OF (\w+)$', f)
         if m:
             name, n, t = m.group(1), int(m.group(2)), m.group(3)
-            if off & 1: off += 1
+            assert t in sizes, 'unknown element type: ' + f
+            if (off & 1) and t != 'CHAR': off += 1
             offs[name] = off
             out.append('  %s %s[%d]; /* %d */' % (ctype[t], name, n, off))
             off += n * sizes[t]
@@ -33,7 +37,10 @@ for line in body.split('\n'):
         m = re.match(r'(\w+)(?::(.*))?$', f)
         assert m, f
         name, t = m.group(1), (m.group(2) or 'LONG').strip()
-        if off & 1: off += 1
+        # an embedded OBJECT member (name:obj, not PTR TO obj) is inline
+        # and this script cannot size it - refuse rather than guess
+        assert t in sizes or t.startswith('PTR TO '), 'unknown field type: ' + f
+        if (off & 1) and t != 'CHAR': off += 1
         offs[name] = off
         if t == 'CHAR':
             out.append('  UBYTE %s; /* %d */' % (name, off)); off += 1
@@ -41,6 +48,7 @@ for line in body.split('\n'):
             out.append('  WORD %s; /* %d */' % (name, off)); off += 2
         else:
             out.append('  LONG %s; /* %d */' % (name, off)); off += 4
+if off & 1: off += 1
 out.append('}; /* size %d */' % off)
 open(sys.argv[2], 'w').write('\n'.join(out) + '\n')
 print('size', off, 'cx', offs['cx'], 'sb', offs['sb'], 'mmask', offs['mmask'], 'vblank', offs['vblank'])

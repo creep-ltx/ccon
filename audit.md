@@ -1262,6 +1262,9 @@ drifted copies. The engine itself came out clean again — the findings
 are in the E handler's packet and window lifecycle, the line editor
 and the parser.
 
+**Status (25.10.26): fix batch in 1.3.1b2** - see todo.md "1.3.1b2" for what
+is fixed, what was verified in FS-UAE and what is still open.
+
 Fresh series **K1..** for code and maintenance, **T1..** for docs and
 tests drift (the letters I, K, N, Q, R, T, U, Y, Z were unused).
 Confidence: **C** = confirmed by tracing, **P** = plausible, not

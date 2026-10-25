@@ -217,4 +217,5 @@ struct con {
   LONG breakarg; /* 4220 */
   LONG rdtask; /* 4224 */
   LONG wrtask; /* 4228 */
-}; /* size 4232 */
+  LONG wpp[8]; /* 4232 */
+}; /* size 4264 */

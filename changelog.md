@@ -7,7 +7,7 @@ mounted as the system `CON:`/`RAW:`.
 
 Beta build numbers (e.g. 1.2b16) are in parentheses as references.
 Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
-1.2.4, 1.2.5, 1.2.6 and 1.2.7 are released and tagged; 1.3.0 is built.
+1.2.4, 1.2.5, 1.2.6, 1.2.7 and 1.3.0 are released and tagged.
 
 ---
 
@@ -26,6 +26,36 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
   used when given (K11), and the answer is always a message port, never
   a bare task (K12).
 - **Ctrl+C stops a pending paste**, as on stock.
+- **Iconify never leaves a program pointing at a closed window.**
+  Over a fullscreen program (Ed, More) Right-Amiga+I and the iconify
+  gadget now beep instead: they keep the window's address for menus
+  and title. Programs that put DOS requesters on the window get them on
+  the restored window (K4).
+- **Keys pressed just as a window iconifies** no longer draw into the
+  closed window (K3).
+- **A paste larger than the input queue** no longer glues the next
+  command onto half a line: a line goes in whole or stays in the
+  editor, with a beep (K5).
+- **Curly quotes in UTF-8 text** (`”`, bytes E2 80 9D) no longer hide
+  the rest of the output in the window title: the 8-bit $9D title
+  introducer is gone (stock has none); `ESC ]` still works (K6). Only
+  title commands 0, 1 and 2 retitle the window now (K15).
+- **Shrinking a window with a long typed line** no longer writes the
+  line into old scrollback (K7); the Tab menu stays inside the window
+  and long names are cut at the column (K8).
+- **No hangs when a window cannot open or come back:** an AUTO window
+  that failed to open fails its reads (K9); a window that cannot be
+  restored becomes an icon to try again, and if even that fails its
+  waiting programs are answered (K10).
+- Smaller: a second `CSI ?47h` keeps the real scrollback (K13); a
+  title in the open string starting with "Screen" or "Font" stays a
+  title (K16); an iconified WAIT window survives its last close (K18);
+  scrollback search never scrolls past the history (K19); packets
+  after the handler agreed to shut down are answered (K21); the font
+  helper cannot run code that was unloaded (K22); screens with an
+  empty bitplane or obscured parts never get direct drawing (K25,
+  K26); control bytes in L:ccon-history are dropped on load and
+  32-bit screens no longer confuse the pen checks (K27).
 
 ---
 

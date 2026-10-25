@@ -12,6 +12,27 @@ boot-tested in CTerm 0.1 (commit 71e29b1) — they transplant in.
 
 ## NEXT: Audit9 + the 3.1 console study (24.10.26)
 
+**1.3.1b2 (24-25.10.26), not yet on the A1200.** Fixed: K1 K2 K11 K12 (break
+pair: last reader + last writer, forgotten at END, checked alive), K3 K4 K5 K6
+K7 K8 K9 K10, K13 K15 K16 K18 K19 K21 K22 K25 K26, K27 (history control bytes,
+depth-32 shifts only), K28 (genstruct packs CHARs like E-VO), K30 (mkdiff
+docstring), T1 T2 T3 T5. fxdiff 4 seeds 0 mismatches, syncheck clean.
+*Verified in FS-UAE 3.2.1:* List/Wait break; `Run List C:` then Ctrl+C at the
+prompt harmless; csh `list sys: all | cat` and `Wait 30 | cat` break (K2's
+symptom did NOT reproduce with 1.3.1b1 either - fix follows the documented
+semantics); curly quotes show (K6); RA+I over Ed beeps, Ed quits clean,
+iconify + icon restore keep scrollback (K4); a 7.9 KB Shift+RA+V paste of
+`echo >>RAM:plog N` lines: lines 000-030 ran in order, the rest dropped with a
+beep, the next typed command ran alone, twice (K5) - the same paste on 1.3.1b1
+kept the emulator busy for 6+ minutes. *Code-read only, not run:* K7 K8 K9 K10
+K13 K15 K16 K18 K19 K21 K22 K25 K26 K27. **Check on the A1200:** conbench
+speed (K26 adds a ClipRect BitMap test to the direct-row path - if 3.2's
+layers set it on visible rects, direct rows switch off: slower, not wrong).
+Still open: K14 K17 K20 K23 K24 K29, the rest of K27 (CSI parameters > 4 -
+see the 3.1 note E2, CSI ESC/CAN abort, PASTEEXEC byte routing, WAIT_CHAR
+res2, stale AppMessages), T4 (tests for CHANGE_SIGNAL/retranslate/shineok).
+Raw-mode Ctrl+C still sends byte 3 only (3.1 also signals; 3.2 not checked).
+
 - **Audit9** (end of `audit.md`, vs 1.3.1b1): K1-K30 + T1-T6. Fix first, as one
   break-owner rework: K1 (Ctrl-C can Signal() a task that has exited), K2, K12;
   then K3, K5, K6, K4, K7+K8, K9+K10.

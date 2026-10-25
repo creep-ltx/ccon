@@ -142,7 +142,7 @@ CONST MARGIN=0,        -> v1.1b43: was 4 - stock CON: has no inset at
                         -> clamped to 255 (gridcalc), rows is not - a
                         -> window taller than DFROWS rows just runs the
                         -> legacy immediate path (dfstart declines)
-      FXCONSIZE=4232,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
+      FXCONSIZE=4264,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
       WOBSZ=16384,      -> S5 write-behind buffer, bytes per console.
                         -> (1.2.8b9: 4096 -> 16384, so a paced flush
                         -> can pool several screens of a burst)
@@ -558,9 +558,15 @@ OBJECT console
                                 -> before every Signal(). breaktask stays
                                 -> the "who last used this console" claim
                                 -> for lookups only.
+  wpp[8]:ARRAY OF LONG          -> 1.3.1b2 (Audit9 K4): processes whose
+                                -> pr_WindowPtr named this window when it
+                                -> was hidden; set NIL meanwhile, pointed
+                                -> at the new window when it reopens
 ENDOBJECT
 
-DEF p96base=NIL,                -> 1.2.8b8: Picasso96API.library
+DEF commitfull=FALSE,           -> 1.3.1b2 (Audit9 K5): a Return found no
+                                -> room for its line (dopaste stops there)
+    p96base=NIL,                -> 1.2.8b8: Picasso96API.library
     dpbpp=1,                    -> 1.2.8b8: bytes per pixel, this paint
     dfvb=FALSE,                 -> 1.2.8b8: screen blank when the batch
                                 -> began (vblank at dfstart)
@@ -1504,6 +1510,9 @@ PROC killhandler()
     DeleteMsgPort(fsport)
     fsport := NIL
   ENDIF
+  -> 1.3.1b2 (Audit9 K21): the packet port last - anything that slipped
+  -> in after the DIE is answered, never left waiting for ever
+  WHILE msg := GetMsg(port) DO ReplyPkt(msg.ln.name, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED)
 ENDPROC
 
 -> M10a: a console starts life here. New() zeroed it; these are the
@@ -1836,6 +1845,12 @@ ENDPROC
 PROC dopkt(pkt:PTR TO dospacket)
   DEF len, old, id:PTR TO infodata, zp:PTR TO LONG, i, sender:PTR TO mp,
       c:PTR TO console, bn:PTR TO ln, bp:PTR TO mp, t:PTR TO tc
+  -> 1.3.1b2 (Audit9 K21): after an agreed DIE nothing new starts here -
+  -> an open queued behind it would build a console nobody tears down
+  IF dieing
+    ReplyPkt(pkt, DOSFALSE, ERROR_DEVICE_NOT_MOUNTED)
+    RETURN
+  ENDIF
   -> 1.2.8b9: the common write, accepted by the C engine (wacc in
   -> engine.c: the conditions under which dowrite's accept is a pure
   -> copy-and-reply); anything else takes the E path below, unchanged
@@ -1879,7 +1894,9 @@ PROC dopkt(pkt:PTR TO dospacket)
       c.rdtask := NIL
       c.wrtask := NIL
       c.breakarg := NIL
-      IF c.win
+      -> 1.3.1b2 (Audit9 K18): an iconified or Workbench-hidden WAIT
+      -> window lingers too (its icon or the reopen brings it back)
+      IF (c.win <> NIL) OR (c.appicon <> NIL) OR c.wbgone
         IF c.waitmode = FALSE   -> stock CON: semantics: the window
           conclose(c)           -> dies with its last handle; WAIT
         ENDIF                   -> lingers for its close gadget and
@@ -1916,6 +1933,14 @@ PROC dopkt(pkt:PTR TO dospacket)
                                 -> queues the report before the read
                                 -> looks (the instant-page handshake)
     ensurewin()                 -> an AUTO window appears on read too
+    -> 1.3.1b2 (Audit9 K9): no window, none coming (the AUTO open failed),
+    -> not iconified and not waiting for the Workbench: no key or EOF can
+    -> ever answer this read - fail it, as a write already fails
+    IF (curcon.win = NIL) AND (curcon.autopend = FALSE) AND
+       (curcon.appicon = NIL) AND (curcon.wbgone = FALSE)
+      ReplyPkt(pkt, -1, ERROR_NO_FREE_STORE)
+      RETURN
+    ENDIF
     sender := pkt.port          -> the reader owns the break signal now
     curcon.breaktask := sender.sigtask -> (the AROS con-handler does the same)
     -> 1.3.1b2 (Audit9 K2): a READ is what may take the break back from a
@@ -2522,6 +2547,17 @@ ENDPROC v
 -> with the normal post-title route. Returns TRUE when tok named a
 -> real option; unrecognized tokens are dropped either way (house
 -> rule), the return only matters to the f=0 caller.
+-> 1.3.1b2 (Audit9 K16): tok starts with keyword kw (any case) but not
+-> in its '=' form - in field 4 that is a title, not an option
+PROC titlekw(tok:PTR TO CHAR, kw:PTR TO CHAR, n)
+  DEF i, c
+  FOR i := 0 TO n - 1
+    c := tok[i]
+    IF (c >= "a") AND (c <= "z") THEN c := c - 32
+    IF c <> kw[i] THEN RETURN FALSE
+  ENDFOR
+ENDPROC tok[n] <> "="
+
 PROC parseopt(tok:PTR TO CHAR)
   DEF tok2[84]:ARRAY OF CHAR, v, c, matched=TRUE
   -> fold to upper case in place, then compare - keeping the raw
@@ -3045,7 +3081,13 @@ PROC parsecon(bname)
         -> so the window was neither grounded NOR titled, and simply
         -> lost the name its caller asked for. Titles named DEFAULTS
         -> or beginning CONFIG were legal before b14 and are again.
-        IF cfgisdirective(tok) OR (parseopt(tok) = FALSE)
+        -> 1.3.1b2 (Audit9 K16): SCREEN and FONT match as prefixes, so
+        -> "Screensaver-log" opened on a screen called "saver-log" and
+        -> "Fonts" replaced a ccon.cfg FONT=. In the title's field only
+        -> their '=' forms count (SCREEN=name, FONT=name).
+        IF titlekw(tok, 'SCREEN', 6) OR titlekw(tok, 'FONT', 4)
+          StrCopy(curcon.wtitlebase, torig)
+        ELSEIF cfgisdirective(tok) OR (parseopt(tok) = FALSE)
           StrCopy(curcon.wtitlebase, torig)
         ENDIF
       ENDIF
@@ -3222,8 +3264,12 @@ PROC diskhelper()
     IF diskfontbase = NIL THEN diskfontbase := OpenLibrary('diskfont.library', 36)
     IF diskfontbase THEN fhfont := OpenDiskFont(fhta)
   ENDIF
-  Signal(fhtask, fhsig)         -> ALWAYS - the handler is waiting
-ENDPROC
+  Forbid()                      -> 1.3.1b2 (Audit9 K22): as aslhelper -
+  Signal(fhtask, fhsig)         -> ALWAYS - the handler is waiting; the
+ENDPROC                         -> Forbid holds until this throwaway
+                                -> process has left our code (exit
+                                -> breaks it), so a DIE cannot unload us
+                                -> under its epilogue
 
 -> 1.2.8b8: open the RTG library on the helper, once per handler
 PROC rtgload()
@@ -3333,7 +3379,11 @@ PROC snmsg(m:PTR TO LONG)
       IF c.win
         flushwq()
       ELSE
-        c.wbgone := TRUE        -> no window yet: the next notice tries
+        -> 1.3.1b2 (Audit9 K10): no window yet. Waiting for the NEXT
+        -> Workbench reopen left parked writers and readers hanging with
+        -> nothing retrying; park the console as an icon instead - a
+        -> double-click tries again (doappmsg)
+        iconfallback()
       ENDIF
     ENDIF
     c := c.next
@@ -3641,7 +3691,9 @@ PROC doappmsg(am:PTR TO appmessage)
         -> click, nothing to close, and dowrite() answers its client
         -> ERROR_NO_FREE_STORE forever. Put the icon back so the user can
         -> simply try again once whatever failed has passed.
-        curcon.appicon := AddAppIconA(0, curcon, 'CCON', wbport, 0, iconobj, NIL)
+        -> 1.3.1b2 (Audit9 K10): its own ICON= image, and if even the
+        -> icon cannot go up, the console's waiters are answered
+        iconfallback()
       ENDIF
       curcon := oldcur
      ENDIF
@@ -3894,6 +3946,15 @@ PROC doiconify()
   IF curcon.win = NIL THEN RETURN
   IF curcon.fwin THEN RETURN
   IF curcon.appicon THEN RETURN         -> already iconified
+  -> 1.3.1b2 (Audit9 K4): not under a raw client. Ed hangs its menu
+  -> strip on this window and More retitles it, both through the
+  -> pointer DISK_INFO gave them; a restore opens a NEW window, and
+  -> their later ClearMenuStrip / SetWindowTitles would land in the
+  -> freed old one. Beep instead, as CTerm refuses a screen switch.
+  IF curcon.rawmode
+    DisplayBeep(NIL)
+    RETURN
+  ENDIF
   flushout(curcon)              -> S5: nothing buffered survives hidewin
   IF wbensure() = FALSE THEN RETURN
   -> 1.2.7b15: ICON=. The first iconify for this console loads it; a
@@ -4241,6 +4302,7 @@ PROC hidewin()
     curcon.appwin := NIL
   ENDIF
   vsfree()                      -> 1.2.8b5: gadgets out BEFORE the window
+  winptrpark(curcon)              -> 1.3.1b2 (Audit9 K4)
   CloseWindow(curcon.win)
   curcon.win := NIL
   curcon.rp := NIL
@@ -4329,6 +4391,7 @@ PROC reopenwin()
   IF curcon.win = NIL THEN vsfree()      -> while the screen is still held
   IF pubscr THEN UnlockPubScreen(NIL, pubscr)
   IF curcon.win = NIL THEN RETURN        -> reopen failed; stays hidden
+  winptrback(curcon)              -> 1.3.1b2 (Audit9 K4)
   vsfix()
   curcon.rp := curcon.win.rport
   curcon.winact := IF curcon.win.flags AND WFLG_WINDOWACTIVE THEN TRUE ELSE FALSE
@@ -6332,6 +6395,7 @@ PROC dopaste(forceexec)
   lw := clipbuf
   IF (lw[0] <> $464F524D) OR (lw[2] <> $46545854) THEN RETURN
   exec := forceexec OR curcon.rawmode OR curcon.pasteexec
+  commitfull := FALSE
   i := 12
   WHILE (i + 8) <= got
     lw := clipbuf + i
@@ -6373,6 +6437,7 @@ PROC dopaste(forceexec)
             IF curcon.rawmode
               IF inqroom(1) = FALSE THEN trunc := TRUE
             ENDIF
+            IF commitfull THEN trunc := TRUE  -> K5: a line did not fit
             IF trunc = FALSE THEN injectbyte(b[c])
           ENDFOR
         ELSE
@@ -6384,6 +6449,14 @@ PROC dopaste(forceexec)
   ENDWHILE
   IF exec
     IF curcon.rawmode THEN inputarrived()
+    -> 1.3.1b2 (Audit9 K5): the paste ran out of queue at a line that did
+    -> not fit - that line is the paste's, not the user's: take it out
+    -> of the editor, or the next thing typed is appended to it
+    IF commitfull AND (curcon.rawmode = FALSE)
+      StrCopy(curcon.ebuf, '')
+      curcon.cpos := 0
+      drawedit()
+    ENDIF
   ELSE
     drawedit()                  -> pasteinsert never draws itself -
   ENDIF                         -> one clean paint after the whole
@@ -7301,7 +7374,7 @@ PROC dpaint(all)
     UnlockLayerRom(ly)
     RETURN FALSE
   ENDIF
-  IF (cr.next <> NIL) OR (cr.obscured <> NIL) OR
+  IF (cr.next <> NIL) OR (cr.obscured <> NIL) OR (Long(cr + 12) <> NIL) OR
      (cr.minx <> ly.minx) OR (cr.miny <> ly.miny) OR
      (cr.maxx <> ly.maxx) OR (cr.maxy <> ly.maxy) OR
      (ly.superbitmap <> NIL) OR (dpfits(ly) = FALSE)
@@ -7541,7 +7614,7 @@ PROC dpplanar(all, ly:PTR TO layer, bm:PTR TO bitmap)
     UnlockLayerRom(ly)
     RETURN FALSE
   ENDIF
-  IF (cr.next <> NIL) OR (cr.obscured <> NIL) OR
+  IF (cr.next <> NIL) OR (cr.obscured <> NIL) OR (Long(cr + 12) <> NIL) OR
      (cr.minx <> ly.minx) OR (cr.miny <> ly.miny) OR
      (cr.maxx <> ly.maxx) OR (cr.maxy <> ly.maxy) OR
      (ly.superbitmap <> NIL) OR (dpfits(ly) = FALSE)
@@ -7598,6 +7671,8 @@ PROC ppsetup(ly:PTR TO layer, bm:PTR TO bitmap)
   IF (bpr AND 3) OR (bm.depth > 8) OR (bm.depth < 1) THEN RETURN FALSE
   FOR p := 0 TO bm.depth - 1
     IF bm.planes[p] AND 3 THEN RETURN FALSE
+    IF bm.planes[p] = NIL THEN RETURN FALSE   -> 1.3.1b2 (Audit9 K25): the
+                                -> all-zeros plane trick - not ours to write
   ENDFOR
   IF ptmp = NIL THEN ptmp := New(16384)
   IF ptmp = NIL THEN RETURN FALSE
@@ -8342,8 +8417,13 @@ PROC csidispatch(c)
     -> pager session with ?47h/?47l, VERIFIED in its binary; the
     -> b10 SetMode coupling raced More's own exit tidy-up)
     IF curcon.cpriv AND (n = 47)
-      dfflush()                 -> S3: the snapshot must see settled pixels
-      altsave()
+      -> 1.3.1b2 (Audit9 K13): a second ?47h while the alternate screen
+      -> is up is a no-op, as in xterm - re-saving would make the
+      -> client's own page "the transcript" and lose the real one
+      IF curcon.altvalid = FALSE
+        dfflush()               -> S3: the snapshot must see settled pixels
+        altsave()
+      ENDIF
     ENDIF
   ELSEIF c = "l"
     IF curcon.cpriv AND (n = 47)
@@ -9090,13 +9170,23 @@ PROC renderx(buf, len, i0, pro)
         curcon.cesc := 0
       ELSEIF c = 27
         curcon.cesc := 4      -> ESC inside the OSC: ST coming?
-      ELSEIF curcon.oscsk AND (c >= "0") AND (c <= "9")
-        -> the Ps number skipped: 0, 1 and 2 all retitle here
-      ELSEIF curcon.oscsk AND (c = ";")
-        curcon.oscsk := FALSE
+      -> 1.3.1b2 (Audit9 K15): the Ps number is read, and only 0, 1 and
+      -> 2 retitle - OSC 8 hyperlinks, 7, 4 and 52 (common over ssh) set
+      -> the title to junk before. oscsk: -1 = no digit yet, n+1 = number
+      -> n so far, 0 = collecting the title, -2 = a body we ignore.
+      ELSEIF (curcon.oscsk <> 0) AND (curcon.oscsk <> -2) AND (c >= "0") AND (c <= "9")
+        j := IF curcon.oscsk = -1 THEN 0 ELSE curcon.oscsk - 1
+        j := Min(Mul(j, 10) + c - "0", 999)
+        curcon.oscsk := j + 1
+      ELSEIF curcon.oscsk = -2
+        -> not a title: eat the body up to BEL/ST
       ELSE
-        curcon.oscsk := FALSE
-        IF (curcon.oscn < 80) AND (c >= 32)
+        IF curcon.oscsk <> 0
+          j := IF curcon.oscsk = -1 THEN 0 ELSE curcon.oscsk - 1
+          curcon.oscsk := IF j <= 2 THEN 0 ELSE -2
+          IF c = ";" THEN c := -1     -> the separator is not title text
+        ENDIF
+        IF (curcon.oscsk = 0) AND (curcon.oscn < 80) AND (c >= 32)
           curcon.osct[curcon.oscn] := c
           curcon.oscn := curcon.oscn + 1
         ENDIF
@@ -9127,9 +9217,11 @@ PROC renderx(buf, len, i0, pro)
     ELSEIF c = $9B
       csistart()
       i := i + 1
-    ELSEIF c = $9D
-      oscstart()          -> the 8-bit OSC introducer
-      i := i + 1
+    -> 1.3.1b2 (Audit9 K6): no 8-bit OSC introducer. $9D is the last
+    -> byte of UTF-8's closing curly quote (E2 80 9D), and it swallowed
+    -> the text after it into the window title; stock console.device
+    -> has no $9D OSC either. ESC ] stays. $9D is now dropped like the
+    -> other C1 bytes, in the C engine too.
     ELSEIF c = 10
       IF alteat
         alteat := FALSE         -> b6: the client's post-restore tidy
@@ -9547,6 +9639,19 @@ PROC drawedit()
   oldext := curcon.edext
   l := StrLen(curcon.ebuf)
   edroom(l)
+  -> 1.3.1b2 (Audit9 K7): a line typed in a big window can be taller
+  -> than the window after a shrink (edcap only bounds typing). Without
+  -> this its last rows were mirrored into ring rows below the grid -
+  -> phantom text in the history for good. Keep what fits, as typing
+  -> would have.
+  IF edlastrow(l) > (curcon.rows - 1)
+    n := edcap()
+    IF l > n
+      SetStr(curcon.ebuf, n)
+      l := n
+      IF curcon.cpos > l THEN curcon.cpos := l
+    ENDIF
+  ENDIF
   IF curcon.pasteq THEN pastehintroom(l)  -> one more row for the hint,
                                           -> before anything below
                                           -> depends on final row counts
@@ -9556,7 +9661,7 @@ PROC drawedit()
   i := 0
   r := curcon.ancy
   xc := curcon.ancx
-  WHILE i < l
+  WHILE (i < l) AND (r <= (curcon.rows - 1))  -> K7: never past the grid
     n := Min(curcon.cols - xc, l - i)
     Move(curcon.rp, curcon.left + Mul(xc, curcon.cw), curcon.topy + Mul(r, curcon.ch) + curcon.baseline)
     Text(curcon.rp, s + i, n)
@@ -9885,7 +9990,7 @@ PROC sbhighlight(v, col, len)
   SetAPen(curcon.rp, 0)
   SetBPen(curcon.rp, curcon.deffg)
   Move(curcon.rp, curcon.left + Mul(col, curcon.cw),
-       curcon.topy + Mul(curcon.rows - 1, curcon.ch) + curcon.baseline)
+       curcon.topy + Mul(curcon.rows - 1 - (v - curcon.viewoff), curcon.ch) + curcon.baseline)
   Text(curcon.rp, rowbuf, len)
   SetAPen(curcon.rp, curcon.deffg)
   SetBPen(curcon.rp, 0)
@@ -9918,7 +10023,10 @@ PROC sbfind(fromv, dir)
       ENDFOR
       IF ok
         curcon.sbidx := v
-        curcon.viewoff := v
+        -> 1.3.1b2 (Audit9 K19): never past the stored history - a match
+        -> in the newest rows-1 lines shows from the live page, the
+        -> highlight on its own row (sbhighlight)
+        curcon.viewoff := Min(v, curcon.sbcnt)
         -> bash-search parity (his fury, rightly): srfind() already
         -> loads a matched HISTORY line into ebuf live, as you type -
         -> sbfind() never did the equivalent, so Enter/Tab/anything
@@ -10439,6 +10547,17 @@ PROC dovanilla(code, qual)
   s := curcon.ebuf
   l := StrLen(curcon.ebuf)
   IF code = 13
+    -> 1.3.1b2 (Audit9 K5): the whole line and its LF, or nothing. A
+    -> full queue (a long paste run with Shift+RA+V, or type-ahead while
+    -> a command runs) used to keep half the line and glue the next one
+    -> onto it. Now the line stays in the editor, to be sent again with
+    -> Return once the reader has taken some; LINEMAX < INQMAX, so an
+    -> empty queue always has room.
+    IF inqroom(l + 1) = FALSE
+      commitfull := TRUE
+      DisplayBeep(NIL)
+      RETURN
+    ENDIF
     -> commit: echo the line into the transcript, feed the readers
     eraseedit()
     render(curcon.ebuf, l)
@@ -11023,11 +11142,19 @@ ENDPROC list
 -> through the same procs the IDCMP path used; every other captured
 -> class was requested via CSI n{ and becomes a raw event report.
 PROC ihdrain()
-  DEF e:PTR TO ihev, c
+  DEF e:PTR TO ihev, c, c2:PTR TO console
   WHILE ihtail <> ihhead
     e := ihring + Shl(ihtail AND (IHMAX - 1), 5)
     c := e.con                  -> the console the chain captured for;
     IF conok(c)                 -> a scrubbed or dead tag is dropped
+      -> 1.3.1b2 (Audit9 K3): and so is one for a console whose window
+      -> was closed earlier in this same drain (RA+I iconifies inside
+      -> ihkey; a key or wheel tick queued behind it would draw through
+      -> rp = NIL). Nested: E's AND does not short-circuit.
+      c2 := c
+      IF c2.win = NIL THEN c := NIL
+    ENDIF
+    IF c
       curcon := c
       IF e.cls = IECLASS_RAWKEY
         IF curcon.evmask AND Shl(1, IECLASS_RAWKEY)
@@ -11355,6 +11482,67 @@ PROC sendbreak(c:PTR TO console, sig)
   ENDIF
 ENDPROC
 
+-> 1.3.1b2 (Audit9 K4): the window is about to close. Every process
+-> whose pr_WindowPtr names it (the Shell and what it runs - DOS puts
+-> its requesters there) gets NIL meanwhile, so a "please insert" never
+-> opens on freed memory; up to 8 are remembered for winptrback.
+PROC winptrpark(c:PTR TO console)
+  DEF n:PTR TO ln, pr:PTR TO process, h, k=0
+  FOR h := 0 TO 7 DO c.wpp[h] := NIL
+  Forbid()
+  FOR h := 0 TO 1
+    n := Long(execbase + (IF h = 0 THEN 406 ELSE 420))
+    WHILE n.succ
+      IF n.type = NT_PROCESS
+        pr := n
+        IF pr.windowptr = c.win
+          pr.windowptr := NIL
+          IF k < 8
+            c.wpp[k] := pr
+            k++
+          ENDIF
+        ENDIF
+      ENDIF
+      n := n.succ
+    ENDWHILE
+  ENDFOR
+  Permit()
+ENDPROC
+
+-> 1.3.1b2 (Audit9 K4): the window is back - the processes parked above
+-> that still exist and still have NIL get the new window
+PROC winptrback(c:PTR TO console)
+  DEF pr:PTR TO process, h
+  Forbid()
+  FOR h := 0 TO 7
+    pr := c.wpp[h]
+    IF pr
+      IF taskalive(pr)
+        IF pr.windowptr = NIL THEN pr.windowptr := c.win
+      ENDIF
+    ENDIF
+    c.wpp[h] := NIL
+  ENDFOR
+  Permit()
+ENDPROC
+
+-> 1.3.1b2 (Audit9 K10): a window that could not come back (restore or
+-> Workbench reopen failed) - show the console as its AppIcon so a
+-> double-click can try again. With no icon either, nothing could ever
+-> bring it back: answer its parked packets as closewin does (reads EOF,
+-> writes accepted), so no client hangs; later reads and writes fail.
+PROC iconfallback()
+  curcon.wbgone := FALSE
+  IF curcon.appicon = NIL
+    IF wbensure()
+      curcon.appicon := AddAppIconA(0, curcon, 'CCON', wbport, 0,
+                                    IF curcon.myicon THEN curcon.myicon ELSE iconobj,
+                                    NIL)
+    ENDIF
+  ENDIF
+  IF curcon.appicon = NIL THEN closewin()
+ENDPROC
+
 -> Audit8 J13: is t a live task? exec's ready and waiting lists, under
 -> Forbid (execbase+406 TaskReady, +420 TaskWait - the module is not
 -> included here, the offsets are the documented ones). The handler
@@ -11600,8 +11788,14 @@ PROC loadhistfile()
         ENDIF
         lp := 0
       ELSEIF lp < LINEMAX - 1
-        line[lp] := c
-        lp++
+        -> 1.3.1b2 (Audit9 K27): a PC-edited file brings CR and other
+        -> controls; recalled, they would act at commit (render(ebuf)).
+        -> Tab becomes a space, other C0 and C1 bytes are dropped.
+        IF c = 9 THEN c := 32
+        IF (c >= 32) AND ((c < $80) OR (c > $9F))
+          line[lp] := c
+          lp++
+        ENDIF
       ENDIF
     ENDFOR
     n := fscall(fsp, ACTION_READ, id, buf, 255)
@@ -12480,7 +12674,7 @@ PROC shineok(cm:PTR TO colormap)
   IF (p < 0) OR (cm = NIL) THEN RETURN FALSE
   n := cm.count
   IF curcon.rp.bitmap
-    IF n > Shl(1, curcon.rp.bitmap.depth) THEN n := Shl(1, curcon.rp.bitmap.depth)
+    IF n > Shl(1, Min(8, curcon.rp.bitmap.depth)) THEN n := Shl(1, Min(8, curcon.rp.bitmap.depth))  -> K27: depth 32 shifts to 0
   ENDIF
   IF p >= n THEN RETURN FALSE
   IF p = curcon.deffg THEN RETURN FALSE
@@ -12516,7 +12710,7 @@ PROC hidpen(cm:PTR TO colormap)
   -> hidden fell to black on his boot shell. Scan ONLY the pens the
   -> screen can display (hidpentest section D proves both halves).
   IF curcon.rp.bitmap
-    k := Shl(1, curcon.rp.bitmap.depth)
+    k := Shl(1, Min(8, curcon.rp.bitmap.depth))  -> K27: depth 32 shifts to 0
     IF n > k THEN n := k
   ENDIF
   IF n < 2 THEN RETURN -1
@@ -12588,7 +12782,8 @@ PROC tcmenudraw()
       nb[l] := tcsuffix(p[0])   -> 1.2.7b10: ':' for a device
       l++
     ENDIF
-    WHILE l < curcon.tcmcolw
+    IF l > curcon.tcmcolw THEN l := curcon.tcmcolw  -> K8: never past
+    WHILE l < curcon.tcmcolw                          -> the right edge
       nb[l] := 32
       l++
     ENDWHILE
@@ -12853,6 +13048,31 @@ PROC dotab(back, cmd)
     IF curcon.cy > 0 THEN curcon.cy := curcon.cy - 1     -> line; its pixels scroll along, anchor
   ENDWHILE                  -> and output cursor track it
   curcon.tcmrow0 := edlastrow(StrLen(curcon.ebuf)) + 1
+  -> 1.3.1b2 (Audit9 K8): the scroll above stops at ancy = 0, so a tall
+  -> edit line can leave fewer rows below it than the menu wants - keep
+  -> the menu inside the grid (a page of it, cycled), or with no row at
+  -> all fall back to NOTABMENU's undrawn cycle
+  i := curcon.rows - curcon.tcmrow0
+  IF i < 1
+    curcon.tchid := TRUE
+    curcon.tcmrows := 0
+    curcon.tcshown := curcon.tcn
+    curcon.tcsel := -1
+    StrCopy(curcon.tcstem, curcon.ebuf + curcon.tcws,
+            curcon.tcwend - curcon.tcws)
+    curcon.tcactive := TRUE
+    IF curcon.ptabfirst
+      tcpick(0)
+    ELSE
+      DisplayBeep(NIL)
+    ENDIF
+    RETURN
+  ENDIF
+  IF curcon.tcmrows > i
+    curcon.tcmrows := i
+    curcon.tcmore := TRUE
+    curcon.tcshown := Min(Mul(curcon.tcmrows, curcon.tcmcols), curcon.tcn)
+  ENDIF
   curcon.tcsel := -1
   -> 1.2.7b13: snapshot the word AS THE MENU FINDS IT - common prefix
   -> already extended above and included on purpose. That extension is

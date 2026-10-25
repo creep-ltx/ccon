@@ -57,7 +57,8 @@ FEATURES
     RightAmiga+I sends a window to a desktop icon and a click
     brings it back exactly as you left it - scrollback, a
     half-typed line and all; its own icon is built into the
-    handler. Works over a fullscreen client (Ed) too
+    handler. (Over a fullscreen client like Ed it only beeps:
+    those keep the window's address.)
 
   - Windows ride along with the Workbench: when it closes for a
     screen mode or font change, CCON: windows close with it and

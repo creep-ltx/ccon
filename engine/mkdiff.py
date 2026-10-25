@@ -7,7 +7,7 @@ the engine globals and a digest of what each flush would have painted.
 Every second chunk is rendered as two calls cut at a random byte
 (Audit8), so split sequences are compared as well.
 Run: engine/mkdiff.py && ecompile engine/fxdiff.e engine/fxdiff LARGE ADDBUF=1
-     && vamos -C 68020 engine/fxdiff [seeds]"""
+     && vamos -C 68020 -m 8192 engine/fxdiff [seeds]"""
 import sys
 src = open('ccon-handler.e', encoding='latin1').read()
 def rep(a, b):
