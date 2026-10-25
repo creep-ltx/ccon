@@ -142,7 +142,7 @@ CONST MARGIN=0,        -> v1.1b43: was 4 - stock CON: has no inset at
                         -> clamped to 255 (gridcalc), rows is not - a
                         -> window taller than DFROWS rows just runs the
                         -> legacy immediate path (dfstart declines)
-      FXCONSIZE=4320,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
+      FXCONSIZE=4324,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
       WOBSZ=16384,      -> S5 write-behind buffer, bytes per console.
                         -> (1.2.8b9: 4096 -> 16384, so a paced flush
                         -> can pool several screens of a burst)
@@ -567,6 +567,9 @@ OBJECT console
                                 -> AppIcon id - a stale AppMessage for a
                                 -> console freed meanwhile cannot restore
                                 -> a NEW console at the same address
+  zbit                          -> 1.3.1b3: OSC 7728 - the signal Ctrl+Z
+                                -> sends the reader (csh while a pipe
+                                -> runs), 16-31; -1 = Ctrl+Z is nothing
   altowner                      -> 1.3.1b2 (Audit9 K17): the writer that
                                 -> entered the alternate screen (?47h); only
                                 -> ITS close restores the transcript
@@ -2122,6 +2125,9 @@ PROC dopkt(pkt:PTR TO dospacket)
     -> Answering 'CCON' makes the shell revert us to cooked and hand
     -> editing to the console - which is the whole point of CCON.
     id.disktype := $43434F4E
+    id.numsofterrors := 7728    -> 1.3.1b3: "OSC 7728 known" - csh sends
+                                -> its Ctrl+Z signal only when it sees this
+                                -> (1.3.0 would retitle the window with it)
     id.volumenode := curcon.win
     ReplyPkt(pkt, DOSTRUE, 0)
   CASE ACTION_SEEK
@@ -9279,9 +9285,16 @@ PROC renderx(buf, len, i0, pro)
       -> 2 retitle - OSC 8 hyperlinks, 7, 4 and 52 (common over ssh) set
       -> the title to junk before. oscsk: -1 = no digit yet, n+1 = number
       -> n so far, 0 = collecting the title, -2 = a body we ignore.
+      ELSEIF curcon.oscsk = -3
+        -> 1.3.1b3: OSC 7728;N - the Ctrl+Z signal bit (csh's); an
+        -> empty N leaves -1, Ctrl+Z nothing again
+        IF (c >= "0") AND (c <= "9")
+          j := IF curcon.zbit < 0 THEN 0 ELSE curcon.zbit
+          curcon.zbit := Min(Mul(j, 10) + c - "0", 99)
+        ENDIF
       ELSEIF (curcon.oscsk <> 0) AND (curcon.oscsk <> -2) AND (c >= "0") AND (c <= "9")
         j := IF curcon.oscsk = -1 THEN 0 ELSE curcon.oscsk - 1
-        j := Min(Mul(j, 10) + c - "0", 999)
+        j := Min(Mul(j, 10) + c - "0", 9999)
         curcon.oscsk := j + 1
       ELSEIF curcon.oscsk = -2
         -> not a title: eat the body up to BEL/ST
@@ -9289,6 +9302,10 @@ PROC renderx(buf, len, i0, pro)
         IF curcon.oscsk <> 0
           j := IF curcon.oscsk = -1 THEN 0 ELSE curcon.oscsk - 1
           curcon.oscsk := IF j <= 2 THEN 0 ELSE -2
+          IF (j = 7728) AND (c = ";")
+            curcon.oscsk := -3
+            curcon.zbit := -1
+          ENDIF
           IF c = ";" THEN c := -1     -> the separator is not title text
         ENDIF
         IF (curcon.oscsk = 0) AND (curcon.oscn < 80) AND (c >= 32)
@@ -10708,6 +10725,13 @@ PROC dovanilla(code, qual)
     -> Ctrl+\ : EOF for the next (or a waiting) read
     curcon.eofpend := TRUE
     satisfyreads()
+  ELSEIF (code = 26) AND (curcon.zbit >= 16) AND (curcon.zbit <= 31)
+    -> 1.3.1b3: Ctrl+Z, while a client asked for it with OSC 7728 (csh
+    -> waiting for a pipe): its signal to the reader only - never to the
+    -> pipe's stages, which did not allocate that bit
+    IF curcon.rdtask
+      IF taskalive(curcon.rdtask) THEN Signal(curcon.rdtask, Shl(1, curcon.zbit))
+    ENDIF
   ELSEIF (code >= 3) AND (code <= 6)
     -> Ctrl+C..F: forward the break to the reader and the writer
     -> (1.3.1b2, Audit9 K1: only to tasks exec still lists), and a
@@ -13280,6 +13304,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1b2 (24.10.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.1b3 (25.10.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'

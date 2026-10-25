@@ -219,5 +219,6 @@ struct con {
   LONG wrtask; /* 4276 */
   LONG wpp[8]; /* 4280 */
   LONG iconid; /* 4312 */
-  LONG altowner; /* 4316 */
-}; /* size 4320 */
+  LONG zbit; /* 4316 */
+  LONG altowner; /* 4320 */
+}; /* size 4324 */

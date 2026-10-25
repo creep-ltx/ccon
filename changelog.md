@@ -11,6 +11,19 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.1b3] — 2026-10-25 (beta)
+
+### Added
+- **Ctrl+Z for csh's pipes.** A client can name a signal with
+  `ESC ] 7728 ; N BEL` (16-31; an empty N turns it off); Ctrl+Z typed
+  in line mode then sends that signal to the reader. csh 0.1b15 uses it
+  while a pipe runs: Ctrl+Z gives the prompt back and the pipe goes on
+  as a job (the Amiga cannot stop a program safely). DISK_INFO marks
+  the support (`id_NumSoftErrors` = 7728), so csh never sends it to a
+  console that would show it.
+
+---
+
 ## [1.3.1b2] — 2026-10-24 (beta)
 
 ### Fixed
