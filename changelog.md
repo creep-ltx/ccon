@@ -11,6 +11,30 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.1b4] — 2026-10-25 (beta)
+
+### Faster
+- **CCON now beats the stock CON: in all 24 conbench rows.** conbench 0.4
+  found three where stock was ahead (FS-UAE, 3.2.1, 68020, 640x256x2):
+  - **mode-switch** 275 → 1038 a second (stock 1002). A switch to raw
+    mode no longer draws the cursor and the edit line at once; both are
+    drawn when the console comes to rest, or by the next read, so a
+    program that flips raw on and off never pays for the drawing.
+  - **query-cursor** 125 → 214 a second (stock 156). The C engine answers
+    `CSI 6n` itself, a READ with input already waiting is answered
+    without going through E, and a WAIT_CHAR with input queued is
+    answered at once.
+  - **insdel-line** ~6550 → ~9700 B/s (stock ~9340). Inserting or
+    deleting a line moves only the cells a row really holds, an empty
+    row costs one test, a row already marked for repainting is not
+    marked again, and the painter fills a row's empty end with one
+    RectFill instead of drawing spaces.
+- The window's wait mask is rebuilt only when a window or a port comes
+  or goes, not after every packet (~80 µs a read or WAIT_CHAR on a stock
+  68020).
+
+---
+
 ## [1.3.1b3] — 2026-10-25 (beta)
 
 ### Added

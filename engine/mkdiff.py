@@ -46,6 +46,7 @@ PROC dfflush()
   fmix(Mul(dflo, 1000) + dfhi)
   dffull := FALSE
   dfpend := 0
+  dfw[1] := -1
   dfgen := dfgen + 1
   IF dfgen > 255
     FOR r := 0 TO 511 DO dfdb[r] := 0
@@ -61,6 +62,7 @@ PROC gsave(g:PTR TO LONG, db:PTR TO CHAR)
   g[0] := dfo; g[1] := dfgen; g[2] := alteat; g[3] := dfnarrow; g[4] := dfon
   g[5] := dfpend; g[6] := dffull; g[7] := dflo; g[8] := dfhi; g[9] := dflost
   g[10] := dfvb; g[11] := atrunv; g[12] := styrunv; g[13] := maskon
+  g[14] := dfw[0]; g[15] := dfw[1]; g[16] := dfw[2]; g[17] := dfw[3]
   CopyMem(dfdb, db, 512); CopyMem(dfx0b, db + 512, 512); CopyMem(dfx1b, db + 1024, 512)
 ENDPROC
 
@@ -68,6 +70,7 @@ PROC grest(g:PTR TO LONG, db:PTR TO CHAR)
   dfo := g[0]; dfgen := g[1]; alteat := g[2]; dfnarrow := g[3]; dfon := g[4]
   dfpend := g[5]; dffull := g[6]; dflo := g[7]; dfhi := g[8]; dflost := g[9]
   dfvb := g[10]; atrunv := g[11]; styrunv := g[12]; maskon := g[13]
+  dfw[0] := g[14]; dfw[1] := g[15]; dfw[2] := g[16]; dfw[3] := g[17]
   CopyMem(db, dfdb, 512); CopyMem(db + 512, dfx0b, 512); CopyMem(db + 1024, dfx1b, 512)
   dfd := dfdb + dfo; dfx0 := dfx0b + dfo; dfx1 := dfx1b + dfo
 ENDPROC

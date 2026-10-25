@@ -10,16 +10,29 @@ ROM option table). The renderer, the 4000-line scrollback model,
 the line editor and the scroll keys were already built and
 boot-tested in CTerm 0.1 (commit 71e29b1) — they transplant in.
 
-## Found by conbench 0.4 (25.10.26), not looked into yet
+## 1.3.1b4 (25.10.26): beat the stock CON: in every conbench row
 
-- **Three rows where the stock CON: beats CCON** (FS-UAE 3.2.1, 68020, 640x256x2; overall
-  CCON is ~7x faster, geometric mean): mode-switch 1012/s vs 275/s (3.7x), insdel-line
-  9360 vs ~6550 B/s (1.4x), query-cursor 158/s vs 125/s (1.26x) - all requests the console
-  must answer or blits it cannot defer, i.e. per-request overhead, not drawing.
-- **Raw mode switches are slow:** mode-switch (SetMode raw on/off) 275 a second against the
-  stock CON:'s 1012. The cooked->raw switch takes the
-  alternate-screen snapshot (conbench's own comment says so) - every full-screen program and
-  csh's prompt pay it. Measure on the A1200 before deciding.
+conbench 0.4's three losing rows, fixed (FS-UAE 3.2.1, 68020, 640x256x2; REPS 5
+MINTIME 3, stock and CCON alternated - single short runs swing ~8%, and write-behind
+flatters CCON in short ones):
+- mode-switch 275 -> 1038/s (stock 1002): SCREEN_MODE defers cursor and edit-line
+  drawing (cursdefer/blipdefer + armflush); setidcmp skips an unchanged mask.
+- query-cursor 125 -> 214/s (stock 156): frun answers CSI 6n into inq; rdacc (entry
+  slot 32) answers a READ with input waiting; wchar answers a timed WAIT_CHAR when
+  input is queued; the per-packet wsigok rebuild is gone (set where windows/ports change).
+- insdel-line ~6550 -> ~9700 B/s (stock ~9340): shiftdown/shiftup move only the cells
+  a row holds (C lengths exact), skip a row pair whose lengths are both 0 (a pointer
+  walk when the rows are one piece of the ring), mark with fills (shiftdirt), and dfw
+  remembers the rows already whole-marked this generation (reset at every dfgen++ and
+  dfscroll, E and C, and in mkdiff's harness); ppaint trims spans to sllen and
+  RectFills the rest. E's inslines/dellines/scroll copy by row length too (rowcopy).
+  Profile notes: in that FS-UAE setup an instruction costs ~0.5 us, so instruction
+  COUNT is the time; an EClock read pair costs ~44 us, subtract it.
+- Still slower than stock: an insert/delete at the TOP of a 30-row window as one
+  synchronous op (885 vs 795 us, idw probe) - not a conbench row; rows 5 and 28 win.
+- Check on the A1200 before installing; fxdiff 0 mismatches (8 seeds).
+- tests/pkcost.e: per-request cost probe (write1, waitchar, query, read-waiting,
+  modeswitch, text13, insdel13), TO file.
 
 ## 1.3.1b3 (25.10.26): Ctrl+Z for csh's pipes
 

@@ -20,6 +20,7 @@
    two images differ. */
 
 #include "con.h"
+#define INQMAX 2048                 /* the input queue (E's INQMAX) */
 
 #ifndef EXEC_TYPES_H
 typedef unsigned long ULONG;
@@ -48,6 +49,7 @@ struct fx {
     LONG *fdelay;           /* 30: its wait (us) */
     ULONG *cprof;           /* 31: profiling builds only (-DPROF): CCON.prof's
                                counters; [62] = timer.device base */
+    LONG *dfw;              /* 32: rows known whole-marked: lo, hi, con, cols */
 };
 
 /* phase counters for a profiling build (build.sh PROF=1): EClock deltas
@@ -177,6 +179,7 @@ static void dfscroll(struct fx *x, struct con *k)
             if (w > *x->dflost) *x->dflost = w;
         }
     }
+    x->dfw[1] = -1;
     o = *x->dfo + 1;
     if (o >= DFROWS) {
         LONG j;
@@ -423,86 +426,159 @@ static void erasebelow(struct fx *x, struct con *k)
 
 /* ---- the region ops, deferred (E1): model moves + full-width marks ---- */
 
-static void rowcopy(struct con *k, LONG from, LONG to)
+
+
+
+/* 1.3.1b4: the row moves of inslines, dellines, scrollup and scrolldown
+   in one tight loop each - rowcopy's work exactly, but the ring index
+   stepped instead of recomputed, the lengths looked up once, and a row
+   that is empty in both places (the usual case below the text) costs a
+   compare. dropwrapf and markrows likewise in one pass. On a stock 020
+   the per-row helper calls were ~100 instructions a row, three loops of
+   them: CSI L in a 30-row window ~1.4ms, the stock CON: ~0.8ms in all
+   (conbench insdel-line). */
+/* rows rtop..rbot of a shift: wrap flags off and every row marked
+   whole, as rowsdirty did a row at a time - a whole-row mark is d = gen,
+   x0 = 0 and x1 = cols-1 (kept when it already reaches further), so it
+   is three fills, not a loop */
+static void shiftdirt(struct fx *x, struct con *k, LONG rtop, LONG rbot)
 {
-    LONG fi = ringidx(k, from), ti = ringidx(k, to);
-    LONG c = k->cols, f = fi * c, t = ti * c, nf = sllen(k, fi), nt = sllen(k, ti);
-    UWORD *l = slp(k);
-    if (nt > nf) nf = nt;                               /* b11: the source's zeros */
-    if (nf > 0) {                                       /* cover the target's old cells */
-        bcopy((UBYTE *)k->sb + t, (UBYTE *)k->sb + f, nf);
-        bcopy((UBYTE *)k->sa + t, (UBYTE *)k->sa + f, nf);
-        bcopy((UBYTE *)k->ss + t, (UBYTE *)k->ss + f, nf);
+    LONG n = rbot - rtop + 1, c = k->cols, i;
+    UBYTE *d = *x->dfd, *b = *x->dfx1, g = (UBYTE)*x->dfgen;
+    if (n < 1) return;
+    if (k->sw) {
+        i = ringidx(k, rtop);
+        if (i + n <= k->sbmax) zfill((UBYTE *)k->sw + i, n);
+        else {
+            zfill((UBYTE *)k->sw + i, k->sbmax - i);
+            zfill((UBYTE *)k->sw, n - (k->sbmax - i));
+        }
     }
-    if (l) l[ti] = l[fi];
+    if (*x->dffull) return;
+    if (rtop < *x->dflo) *x->dflo = rtop;
+    if (rbot > *x->dfhi) *x->dfhi = rbot;
+    {
+        LONG *wm = x->dfw;
+        if (wm[2] == (LONG)k && wm[3] == c && wm[1] >= wm[0]) {
+            if (rtop >= wm[0] && rbot <= wm[1]) return;     /* marked already */
+            if (rtop <= wm[1] + 1 && rbot >= wm[0] - 1) {   /* joins it */
+                if (rtop < wm[0]) wm[0] = rtop;
+                if (rbot > wm[1]) wm[1] = rbot;
+            } else { wm[0] = rtop; wm[1] = rbot; }
+        } else { wm[0] = rtop; wm[1] = rbot; wm[2] = (LONG)k; wm[3] = c; }
+    }
+    {
+        UBYTE *dp = d + rtop, *bp = b + rtop;
+        LONG m = n, cm = c - 1;
+        while (--m >= 0) {
+            if (*dp++ != g || *bp < cm) *bp = (UBYTE)cm;
+            bp++;
+        }
+    }
+    bfill(d + rtop, g, n);
+    zfill(*x->dfx0 + rtop, n);
 }
 
-static void dropwrapf(struct con *k, LONG r0, LONG r1)
+/* one ring row's cells to another: only as far as either reaches */
+#define ROWMOVE(ti, fi) do { \
+        LONG nf = l ? l[fi] : c, nt = l ? l[ti] : c; \
+        if (nf > c) nf = c; \
+        if (nt > c) nt = c; \
+        if (nt > nf) nf = nt; \
+        if (nf > 0) { \
+            LONG f = (fi) * c, t = (ti) * c; \
+            bcopy(sb + t, sb + f, nf); \
+            bcopy(sa + t, sa + f, nf); \
+            bcopy(ss + t, ss + f, nf); \
+        } \
+        if (l) l[ti] = l[fi]; \
+    } while (0)
+
+/* rows rtop..rbot shift down by n (rows rtop..rtop+n-1 come out empty).
+   A row pair whose lengths are both 0 has nothing to move (its target
+   length is already the 0 it would get), so an empty row costs one test */
+static void shiftdown(struct fx *x, struct con *k, LONG rtop, LONG rbot, LONG n)
 {
-    LONG r;
-    if (!k->sw) return;
-    for (r = r0; r <= r1; r++) setwrapf(k, r, 0);
+    LONG r, c = k->cols, ti = ringidx(k, rbot), fi = ringidx(k, rbot - n);
+    UWORD *l = slp(k);
+    UBYTE *sb = (UBYTE *)k->sb, *sa = (UBYTE *)k->sa, *ss = (UBYTE *)k->ss;
+    if (l && ringidx(k, rtop) + (rbot - rtop) < k->sbmax) {
+        /* the rows lie in one piece of the ring: walk the lengths */
+        UWORD *lt = l + ti, *lf = l + fi;
+        LONG m = rbot - n - rtop + 1;
+        while (--m >= 0) {
+            if (*lf | *lt) ROWMOVE(ti, fi);
+            lt--; lf--; ti--; fi--;
+        }
+    } else for (r = rbot; r >= rtop + n; r--) {
+        if (!l || (l[fi] | l[ti])) ROWMOVE(ti, fi);
+        ti = ti ? ti - 1 : k->sbmax - 1;
+        fi = fi ? fi - 1 : k->sbmax - 1;
+    }
+    for (r = rtop; r <= rtop + n - 1 && r <= rbot; r++) clearrow(k, r);
+    shiftdirt(x, k, rtop, rbot);
 }
 
-static void markrows(struct fx *x, struct con *k, LONG r0, LONG r1)
+/* rows rtop..rbot shift up by n (rows rbot-n+1..rbot come out empty) */
+static void shiftup(struct fx *x, struct con *k, LONG rtop, LONG rbot, LONG n)
 {
-    LONG r;
-    for (r = r0; r <= r1; r++) dfmark(x, k, r, 0, k->cols - 1);
+    LONG r, c = k->cols, ti = ringidx(k, rtop), fi = ringidx(k, rtop + n);
+    UWORD *l = slp(k);
+    UBYTE *sb = (UBYTE *)k->sb, *sa = (UBYTE *)k->sa, *ss = (UBYTE *)k->ss;
+    if (l && ti + (rbot - rtop) < k->sbmax) {
+        UWORD *lt = l + ti, *lf = l + fi;
+        LONG m = rbot - n - rtop + 1;
+        while (--m >= 0) {
+            if (*lf | *lt) ROWMOVE(ti, fi);
+            lt++; lf++; ti++; fi++;
+        }
+    } else for (r = rtop; r <= rbot - n; r++) {
+        if (!l || (l[fi] | l[ti])) ROWMOVE(ti, fi);
+        if (++ti >= k->sbmax) ti = 0;
+        if (++fi >= k->sbmax) fi = 0;
+    }
+    for (r = rbot - n + 1; r <= rbot; r++)
+        if (r >= rtop) clearrow(k, r);
+    shiftdirt(x, k, rtop, rbot);
 }
 
 /* inslines */
 static void inslines(struct fx *x, struct con *k, LONG n)
 {
-    LONG r;
     if (n < 1) n = 1;
     if (n > k->rows - k->cy) n = k->rows - k->cy;
     if (k->sb) {
-        for (r = k->rows - 1; r >= k->cy + n; r--) rowcopy(k, r - n, r);
-        for (r = k->cy; r <= k->cy + n - 1; r++) clearrow(k, r);
-        dropwrapf(k, k->cy, k->rows - 1);
-        markrows(x, k, k->cy, k->rows - 1);
+        shiftdown(x, k, k->cy, k->rows - 1, n);
     }
 }
 
 /* dellines */
 static void dellines(struct fx *x, struct con *k, LONG n)
 {
-    LONG r;
     if (n < 1) n = 1;
     if (n > k->rows - k->cy) n = k->rows - k->cy;
     if (k->sb) {
-        for (r = k->cy; r <= k->rows - 1 - n; r++) rowcopy(k, r + n, r);
-        for (r = k->rows - n; r <= k->rows - 1; r++) clearrow(k, r);
-        dropwrapf(k, k->cy, k->rows - 1);
-        markrows(x, k, k->cy, k->rows - 1);
+        shiftup(x, k, k->cy, k->rows - 1, n);
     }
 }
 
 /* scrollup */
 static void scrollup(struct fx *x, struct con *k, LONG n)
 {
-    LONG r;
     if (n < 1) n = 1;
     if (n > k->rows) n = k->rows;
     if (k->sb) {
-        for (r = 0; r <= k->rows - 1 - n; r++) rowcopy(k, r + n, r);
-        for (r = k->rows - n; r <= k->rows - 1; r++) clearrow(k, r);
-        dropwrapf(k, 0, k->rows - 1);
-        markrows(x, k, 0, k->rows - 1);
+        shiftup(x, k, 0, k->rows - 1, n);
     }
 }
 
 /* scrolldown */
 static void scrolldown(struct fx *x, struct con *k, LONG n)
 {
-    LONG r;
     if (n < 1) n = 1;
     if (n > k->rows) n = k->rows;
     if (k->sb) {
-        for (r = k->rows - 1; r >= n; r--) rowcopy(k, r - n, r);
-        for (r = 0; r <= n - 1; r++) clearrow(k, r);
-        dropwrapf(k, 0, k->rows - 1);
-        markrows(x, k, 0, k->rows - 1);
+        shiftdown(x, k, 0, k->rows - 1, n);
     }
 }
 
@@ -704,6 +780,31 @@ LONG frun(struct fx *x, const UBYTE *s, LONG i, LONG len)
                 k->cx = par[1] - 1;
                 if (k->cx < 0) k->cx = 0;
                 if (k->cx > k->cols) k->cx = k->cols;
+            } else if (fin == 'n') {
+                /* 1.3.1b4: CSI 6n answered here, as E's sendcpr: CSI row;col R
+                   (8-bit CSI) into the input queue, whole or not at all. A
+                   read or wait already queued needs E's inputarrived: E then.
+                   conbench's query-cursor sent every flush back to E for it */
+                if (par[0] == 6) {
+                    UBYTE b[24];
+                    LONG len = 0, v, d, room;
+                    if (k->rdn > 0 || k->wcn > 0) return i;
+                    b[len++] = 0x9B;
+                    for (v = k->cy + 1, d = 1; d * 10 <= v; d *= 10) ;
+                    for (; d > 0; d /= 10) b[len++] = '0' + (v / d) % 10;
+                    b[len++] = ';';
+                    v = (k->cx < k->cols - 1 ? k->cx : k->cols - 1) + 1;
+                    for (d = 1; d * 10 <= v; d *= 10) ;
+                    for (; d > 0; d /= 10) b[len++] = '0' + (v / d) % 10;
+                    b[len++] = 'R';
+                    room = (INQMAX - 1) - ((k->inqt - k->inqh + INQMAX) & (INQMAX - 1));
+                    if (room >= len) {
+                        for (d = 0; d < len; d++) {
+                            ((UBYTE *)k->inq)[k->inqt] = b[d];
+                            k->inqt = (k->inqt + 1) & (INQMAX - 1);
+                        }
+                    }
+                }
             } else if (fin == 'K') {
                 k->jslk = FALSE;
                 eraseeol(x, k);
@@ -1084,6 +1185,35 @@ static LONG prowm(struct pctx *pc, struct con *k, struct pm *f, LONG np, LONG r,
 #endif
 
 /* dpplanar's row loop: every row in full (all = 2) or the dirty spans */
+static void gwaitblit(void *gfx);
+
+static void gfill(void *gfx, UBYTE *rp, LONG pen, LONG x0, LONG y0, LONG x1, LONG y1)
+{
+    LONG old = rp[25];                                  /* rp_FgPen */
+    {
+        register void *a1 __asm__("a1") = rp;
+        register LONG d0 __asm__("d0") = pen;
+        register void *a6 __asm__("a6") = gfx;
+        __asm__ volatile ("jsr -342(%%a6)" : "+r"(a1), "+r"(d0), "+r"(a6) : : "d1", "a0", "memory", "cc");
+    }
+    {
+        register void *a1 __asm__("a1") = rp;
+        register LONG d0 __asm__("d0") = x0;
+        register LONG d1 __asm__("d1") = y0;
+        register LONG d2 __asm__("d2") = x1;
+        register LONG d3 __asm__("d3") = y1;
+        register void *a6 __asm__("a6") = gfx;
+        __asm__ volatile ("jsr -306(%%a6)" : "+r"(a1), "+r"(d0), "+r"(d1), "+r"(d2), "+r"(d3), "+r"(a6)
+                          : : "a0", "memory", "cc");
+    }
+    {
+        register void *a1 __asm__("a1") = rp;
+        register LONG d0 __asm__("d0") = old;
+        register void *a6 __asm__("a6") = gfx;
+        __asm__ volatile ("jsr -342(%%a6)" : "+r"(a1), "+r"(d0), "+r"(a6) : : "d1", "a0", "memory", "cc");
+    }
+}
+
 LONG ppaint(struct pctx *pc, struct fx *x, LONG all)
 {
     struct con *k = *x->curcon;
@@ -1097,12 +1227,49 @@ LONG ppaint(struct pctx *pc, struct fx *x, LONG all)
 #ifndef OLDPAINT
     if (pc->cs == 8) {
         struct pm *f = (struct pm *)((UBYTE *)pc->tmp + TMP_PSEG);
-        LONG np = pmsetup(pc, k, mask, f);
+        LONG np = pmsetup(pc, k, mask, f), a, b, fills = 0;
+        UBYTE *rp = (UBYTE *)k->rp;
+        WORD *tn = (WORD *)((UBYTE *)pc->tmp + TMP_TN);
+        /* 1.3.1b4: glyphs only as far as the row's text reaches (its
+           length, sl); the empty rest of a span is one RectFill in the
+           pen a zero cell's background gets (tn[0]), through the
+           rastport's write mask. conbench's insdel-line marks every row
+           below the cursor, nearly all empty, and painting their spaces
+           glyph by glyph cost ~2.5ms a write on a stock 020. The fills
+           go first and are waited for, so the blitter and the CPU never
+           share a boundary byte at once. Not in COMPLEMENT mode. */
+        UBYTE trim = !(rp[28] & 2);
+        for (r = r0; r <= r1; r++) {
+            if (all == 2) { a = 0; b = k->cols - 1; }
+            else if ((*x->dfd)[r] == (UBYTE)*x->dfgen) { a = (*x->dfx0)[r]; b = (*x->dfx1)[r]; }
+            else continue;
+            if (a < 0) a = 0;
+            if (b > k->cols - 1) b = k->cols - 1;
+            if (trim) {
+                LONG len = sllen(k, ringidx(k, r));
+                if (len < 0 || len > k->cols) len = k->cols;
+                if (b >= len) {
+                    LONG c0 = a > len ? a : len;
+                    if (c0 <= b) {
+                        gfill(x->gfxbase, rp, tn[0] & 0xFF, k->left + c0 * 8, k->topy + r * k->ch,
+                              k->left + (b + 1) * 8 - 1, k->topy + (r + 1) * k->ch - 1);
+                        fills++;
+                    }
+                }
+            }
+        }
+        if (fills) gwaitblit(x->gfxbase);
         for (r = r0; r <= r1; r++) {
             sty = 0;
-            if (all == 2) sty = prowm(pc, k, f, np, r, 0, k->cols - 1);
-            else if ((*x->dfd)[r] == (UBYTE)*x->dfgen)
-                sty = prowm(pc, k, f, np, r, (*x->dfx0)[r], (*x->dfx1)[r]);
+            if (all == 2) { a = 0; b = k->cols - 1; }
+            else if ((*x->dfd)[r] == (UBYTE)*x->dfgen) { a = (*x->dfx0)[r]; b = (*x->dfx1)[r]; }
+            else { pc->sty[r] = 0; continue; }
+            if (trim) {
+                LONG len = sllen(k, ringidx(k, r));
+                if (len < 0 || len > k->cols) len = k->cols;
+                if (b > len - 1) b = len - 1;
+            }
+            if (a <= b) sty = prowm(pc, k, f, np, r, a, b);
             pc->sty[r] = sty;
             if (sty) styled = 1;
         }
@@ -1310,6 +1477,7 @@ LONG cflush(struct fx *x, struct pctx *pc)
     }
     gcall_lock(gfx, ly, 1);
     if (res & 1) return res;                            /* E Texts the styled rows */
+    x->dfw[1] = -1;
     (*x->dfgen)++;
     if (*x->dfgen > 255) {
         for (r = 0; r < 512; r++) x->dfdb[r] = 0;
@@ -1341,7 +1509,9 @@ static LONG cfout(struct fx *x, struct pctx *pc, struct con *c)
     LONG *pk = x->pkey, i, r;
     /* cesc: a sequence the last flush left half parsed (Audit8 J1) - frun
        starts every buffer at state 0, so only E may finish it */
-    if (c->wolen <= 0 || c->cesc || !c->win || c->viewoff || c->rawmode || c->rdn > 0
+    /* 1.3.1b4: raw mode too - E takes the block cursor off before and puts
+       it back after (flushout), as dorender does around render */
+    if (c->wolen <= 0 || c->cesc || !c->win || c->viewoff || c->rdn > 0
         || c->srch || c->pasteq || c->edlast || (eb && eb[0]) || c->edext
         || !c->sb || c->rows > DFROWS || c->cursoft || !c->dpok
         || c->mfloor == 0xFF || c->cw != 8 || !rp) return 0;
@@ -1357,6 +1527,7 @@ static LONG cfout(struct fx *x, struct pctx *pc, struct con *c)
     *x->dfpend = 0;
     *x->dffull = FALSE;
     *x->dfnarrow = FALSE;
+    x->dfw[1] = -1;
     (*x->dfgen)++;
     if (*x->dfgen > 255) {
         for (i = 0; i < 512; i++) x->dfdb[i] = 0;
@@ -1407,7 +1578,6 @@ LONG cfout_e(struct fx *x, struct pctx *pc, struct con *c) { return cfout(x, pc,
    E resumes (cfresume) then runs its own WAIT_CHAR from the top (its
    flushout is then a no-op); 3 = flushed, E runs its WAIT_CHAR (a timed
    wait to park, or a window to open) */
-#define INQMAX 2048
 LONG wchar(struct fx *x, struct pctx *pc, struct dpkt *pkt)
 {
     struct con *c = 0, *p;
@@ -1438,7 +1608,12 @@ LONG wchar(struct fx *x, struct pctx *pc, struct dpkt *pkt)
         if (!r) return 0;
         if (r >= 2) return r;
     }
-    if (!c->win || pkt->arg1 > 0) return 3;
+    if (!c->win) return 3;
+    /* 1.3.1b4: a timed wait with input already there is answered here too;
+       only a real wait (nothing queued) goes to E to park on the timer.
+       Every WaitForChar(fh, n) a reading program makes went to E before -
+       conbench's query-cursor found CCON slower than the stock CON: */
+    if (pkt->arg1 > 0 && c->inqt == c->inqh) return 3;
     *x->curcon = c;
     c->bliptick = TRUE;
     if (c->jauto && c->jburst > 0) {
@@ -1446,12 +1621,71 @@ LONG wchar(struct fx *x, struct pctx *pc, struct dpkt *pkt)
         if (c->jsync >= 4) c->jeff = c->rows - 1 > 1 ? c->rows - 1 : 1;
     }
     pkt->res1 = ((c->inqt - c->inqh + INQMAX) & (INQMAX - 1)) > 0 ? -1 : 0;
-    pkt->res2 = 0;
+    /* res2: the lines waiting (bytes in raw mode), as E's inqlines (K27) */
+    {
+        LONG i = c->inqh, n = 0;
+        while (i != c->inqt) {
+            if (c->rawmode || ((UBYTE *)c->inq)[i] == 10) n++;
+            i = (i + 1) & (INQMAX - 1);
+        }
+        pkt->res2 = n;
+    }
     {
         void *rport = pkt->port;
         pkt->port = x->port;
         putmsg(x->sysbase, rport, pkt->link);
     }
+    return 1;
+}
+
+/* 1.3.1b4: ACTION_READ when it can be answered at once - input waiting,
+   no read queued before it, no output to flush first, the window open and
+   nothing for E to draw (a cooked blip, a jump's tail). Does what E's READ
+   does in that case (the break pair, the bytes up to a LF in cooked mode,
+   the reply). 0 = E does it all; 1 = replied. A read a program makes for
+   every byte of an answer (CSI 6n's report) went through E each time -
+   conbench's query-cursor found CCON slower than the stock CON: */
+LONG rdacc(struct fx *x, struct dpkt *pkt)
+{
+    struct con *k = (struct con *)pkt->arg1, *c;
+    UBYTE *dst = (UBYTE *)pkt->arg2, *t;
+    LONG max = pkt->arg3, n = 0;
+    void *rport;
+    for (c = (struct con *)*x->conlist; c; c = (struct con *)c->next)
+        if (c == k) break;
+    if (!c || !k->win || k->appicon || k->wolen > 0 || k->rdn > 0) return 0;
+    if (k->inqt == k->inqh || max <= 0 || k->jslk) return 0;
+    if (k->blipdefer) {
+        if (!k->rawmode || k->cursdefer) return 0;     /* E draws it */
+        k->blipdefer = FALSE;                          /* as E's blipnow, raw */
+    }
+    *x->curcon = k;
+    /* jsettle's bookkeeping, nothing to draw (jslk is clear) */
+    k->jburst = 0;
+    if (k->jsync) {
+        k->jsync = 0;
+        if (k->jauto) {
+            LONG e = k->rows >> 2;
+            if (e < 2) e = 2;
+            if (e > (k->rows - 1 > 1 ? k->rows - 1 : 1)) e = k->rows - 1 > 1 ? k->rows - 1 : 1;
+            k->jeff = e;
+        }
+    }
+    t = ((UBYTE **)pkt->port)[4];                      /* mp_SigTask */
+    k->breaktask = (LONG)t;
+    k->rdtask = (((UBYTE *)pkt->port)[14] & 3) ? 0 : (LONG)t;
+    k->breakarg = (LONG)pkt->port;
+    while (n < max && k->inqt != k->inqh) {
+        UBYTE ch = ((UBYTE *)k->inq)[k->inqh];
+        k->inqh = (k->inqh + 1) & (INQMAX - 1);
+        dst[n++] = ch;
+        if (ch == 10 && !k->rawmode) break;
+    }
+    rport = pkt->port;
+    pkt->res1 = n;
+    pkt->res2 = 0;
+    pkt->port = x->port;
+    putmsg(x->sysbase, rport, pkt->link);
     return 1;
 }
 

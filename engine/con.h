@@ -220,5 +220,6 @@ struct con {
   LONG wpp[8]; /* 4280 */
   LONG iconid; /* 4312 */
   LONG zbit; /* 4316 */
-  LONG altowner; /* 4320 */
-}; /* size 4324 */
+  LONG cursdefer; /* 4320 */
+  LONG altowner; /* 4324 */
+}; /* size 4328 */

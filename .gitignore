@@ -34,3 +34,4 @@ tests/sbresizetest
 tests/srbench
 __pycache__/
 .claude/settings.local.json
+tests/pkcost

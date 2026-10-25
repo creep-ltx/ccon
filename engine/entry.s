@@ -1,6 +1,6 @@
 | engine.bin's entry table: the handler calls offset 0 (frun), 4 (fcheck),
-| 8 (ppaint), 12 (gshift), 16 (wacc), 20 (cflush), 24 (cfout_e), 28 (wchar), 32 (unused:
-| returns 0 - drain was removed by Audit8 J31, the slot keeps mscan at 36), 36 (mscan)
+| 8 (ppaint), 12 (gshift), 16 (wacc), 20 (cflush), 24 (cfout_e), 28 (wchar), 32 (rdacc,
+| 1.3.1b4; was drain until Audit8 J31), 36 (mscan)
 	.text
 	.globl _start
 _start:
@@ -12,6 +12,5 @@ _start:
 	bra.w	cflush
 	bra.w	cfout_e
 	bra.w	wchar
-	moveq	#0,%d0		| 32: was drain - 4 bytes, like a bra.w
-	rts
+	bra.w	rdacc		| 32: 1.3.1b4 (was drain, removed by Audit8 J31)
 	bra.w	mscan

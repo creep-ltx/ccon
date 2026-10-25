@@ -142,7 +142,7 @@ CONST MARGIN=0,        -> v1.1b43: was 4 - stock CON: has no inset at
                         -> clamped to 255 (gridcalc), rows is not - a
                         -> window taller than DFROWS rows just runs the
                         -> legacy immediate path (dfstart declines)
-      FXCONSIZE=4324,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
+      FXCONSIZE=4328,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
       WOBSZ=16384,      -> S5 write-behind buffer, bytes per console.
                         -> (1.2.8b9: 4096 -> 16384, so a paced flush
                         -> can pool several screens of a burst)
@@ -570,6 +570,9 @@ OBJECT console
   zbit                          -> 1.3.1b3: OSC 7728 - the signal Ctrl+Z
                                 -> sends the reader (csh while a pipe
                                 -> runs), 16-31; -1 = Ctrl+Z is nothing
+  cursdefer                     -> 1.3.1b4: the raw-mode cursor is not drawn
+                                -> yet (a mode switch defers it; blipnow
+                                -> draws it at rest, like the cooked blip)
   altowner                      -> 1.3.1b2 (Audit9 K17): the writer that
                                 -> entered the alternate screen (?47h); only
                                 -> ITS close restores the transcript
@@ -789,7 +792,12 @@ DEF iconser=0,                  -> 1.3.1b2 (Audit9 K27): AppIcon ids
     -> 1.2.8b9: the C engine's view of the globals above, by address
     -> (struct fx in engine.c - same order), and its on/off switch: on
     -> only when fxsetup's layout check agrees with genstruct.py
-    fxtab[32]:ARRAY OF LONG, fastok=FALSE, fxret=0, fxold=NIL, wsigok=FALSE,
+    -> 1.3.1b4: dfw = the rows the C engine knows are whole-marked in this
+    -> generation (lo, hi, console, cols - hi < lo = nothing known), so a
+    -> second insert/delete over them skips re-marking; every place that
+    -> starts a generation or slides the marks forgets it (dfw[1] := -1)
+    dfw[4]:ARRAY OF LONG,
+    fxtab[33]:ARRAY OF LONG, fastok=FALSE, fxret=0, fxold=NIL, wsigok=FALSE,
     -> the planar painter's context (struct pctx in engine.c) and its
     -> pre-shifted glyph cache, rebuilt when font, height or phase move
     pctx[24]:ARRAY OF LONG, gsh=NIL:PTR TO CHAR, gshtf=NIL, gshch=0,
@@ -1867,7 +1875,21 @@ PROC dopkt(pkt:PTR TO dospacket)
       ENDIF
     ENDIF
   ENDIF
-  wsigok := FALSE               -> b11: not a fast write - rebuild the mask
+  -> 1.3.1b4: and the common read, answered at once by the C engine
+  -> (rdacc: input waiting, nothing queued or to draw first)
+  IF pkt.type = ACTION_READ
+    IF fastok
+      IF fcall2(32, fxtab, pkt) THEN RETURN
+    ENDIF
+  ENDIF
+  -> 1.3.1b4: no blanket mask rebuild here any more. b11 rebuilt it after
+  -> every packet that was not a fast write - ~100us of E a time on a
+  -> stock 020 - though only a window opening or closing, or a port being
+  -> made, changes it; those places say so themselves (wsigok := FALSE in
+  -> openwin, reopenwin, closewin, hidewin, wbensure, the screennotify
+  -> setup). conbench found reads, WAIT_CHARs and mode switches each ~80us
+  -> slower than the stock CON:, which made query-cursor and mode-switch
+  -> two of the three rows stock won.
   SELECT pkt.type
   CASE ACTION_FINDINPUT;  dofind(pkt)
   CASE ACTION_FINDOUTPUT; dofind(pkt)
@@ -2024,20 +2046,32 @@ PROC dopkt(pkt:PTR TO dospacket)
     ensurewin()                 -> mode changes imply a console soon
     -> arg1: DOSTRUE = raw, 0 = cooked. Raw parks the line editor -
     -> keys become bytes, the client owns echo and screen
+    -> 1.3.1b4: the new mode's cursor (raw's block, cooked's edit line)
+    -> is drawn at REST - the next read, a choke point or a quiet timer
+    -> tick (blipnow) - not on the switch. conbench's mode-switch found
+    -> the stock CON: 3.7x faster: a program that switches back and forth
+    -> (csh's prompt, every full-screen program starting and quitting)
+    -> paid an erase and a draw both ways, for pixels nobody saw.
     IF pkt.arg1
       IF curcon.rawmode = FALSE
         curcon.rawmode := TRUE
         tcclose()
-        eraseedit()
-        cursdraw()              -> the block cursor appears at once
+        IF (curcon.edext <> 0) OR curcon.ebuf[0] OR (curcon.blipdefer = FALSE)
+          eraseedit()           -> only if the editor is on screen
+        ENDIF
+        curcon.cursdefer := TRUE
+        curcon.blipdefer := TRUE
+        armflush()              -> drawn by the timer if no read comes
       ENDIF
     ELSE
       IF curcon.rawmode
         curcon.rawmode := FALSE
-        curserase()             -> the blip owns cooked mode
-        reanchor()              -> (b11: the altscreen no longer rides
-        drawedit()              -> SetMode - More's ?47l comes AFTER
-      ENDIF                     -> this packet and restores then)
+        curcon.cursdefer := FALSE
+        curserase()             -> the blip owns cooked mode (no-op when
+        reanchor()              -> the block was never drawn); the edit
+        curcon.blipdefer := TRUE  -> line follows at rest (b11: the
+        armflush()              -> altscreen no longer rides SetMode -
+      ENDIF                     -> More's ?47l restores it later)
       -> a client reverting to cooked is done with its raw event
       -> reports too (Ed does not send CSI } on exit); clearing the
       -> mask also resumes the parked UserPort drain (M6)
@@ -2305,7 +2339,17 @@ ENDPROC
 -> 1.2.8b9: the deferred blip, now (see dorender)
 PROC blipnow()
   IF curcon.blipdefer = FALSE THEN RETURN
-  IF (curcon.win = NIL) OR curcon.rawmode THEN RETURN
+  IF curcon.win = NIL THEN RETURN
+  IF curcon.rawmode
+    -> 1.3.1b4: in raw mode only a cursor a mode switch deferred is
+    -> drawn here; output draws its own
+    curcon.blipdefer := FALSE
+    IF curcon.cursdefer
+      curcon.cursdefer := FALSE
+      cursdraw()
+    ENDIF
+    RETURN
+  ENDIF
   IF (curcon.viewoff > 0) OR curcon.selon OR (curcon.appicon <> NIL) THEN RETURN
   drawedit()
 ENDPROC
@@ -2332,10 +2376,39 @@ PROC flushout(c:PTR TO console)
     RETURN
   ENDIF
   IF fastok                     -> 1.2.8b9: the whole flush in C (cfout)
+    -> 1.3.1b4: what dorender does around render, done around the C
+    -> engine too, so it can take these flushes: the raw block cursor
+    -> off before and on after, and a blip-only editor erased first (the
+    -> blip comes back at rest). cfout refused both - raw mode always, a
+    -> drawn blip after every pause - and E rendered them: conbench's
+    -> insdel-line found the stock CON: faster, Ed's own scrolls too.
+    old := curcon
+    curcon := c
+    IF c.rawmode
+      curserase()
+    ELSEIF (c.edext <> 0) AND (c.rdn = 0) AND (c.srch = FALSE) AND
+           (c.pasteq = NIL) AND (c.edlast = 0) AND (c.ebuf[0] = 0)
+      eraseedit()
+    ENDIF
+    curcon := old
     i := fcall3(24, fxtab, pctx, c)
-    IF i = 1 THEN RETURN
+    IF i = 1
+      IF c.rawmode
+        old := curcon
+        curcon := c
+        cursdraw()
+        curcon := old
+      ENDIF
+      RETURN
+    ENDIF
     IF i >= 2
       cfresume(i)
+      IF c.rawmode
+        old := curcon
+        curcon := c
+        cursdraw()
+        curcon := old
+      ENDIF
       RETURN
     ENDIF
   ENDIF
@@ -3347,6 +3420,7 @@ PROC snsetup()
   ENDIF
   IF snbase = NIL THEN RETURN
   snport := CreateMsgPort()
+  wsigok := FALSE               -> 1.3.1b4: a new port to wait on
   IF snport = NIL THEN RETURN
   b := snbase
   p := snport
@@ -3695,7 +3769,10 @@ PROC wbensure()
   IF iconok THEN RETURN TRUE
   IF workbenchbase = NIL THEN workbenchbase := OpenLibrary('workbench.library', 37)
   IF workbenchbase = NIL THEN RETURN FALSE
-  IF wbport = NIL THEN wbport := CreateMsgPort()
+  IF wbport = NIL
+    wbport := CreateMsgPort()
+    wsigok := FALSE             -> 1.3.1b4: a new port to wait on
+  ENDIF
   IF wbport = NIL THEN RETURN FALSE
   IF iconobj = NIL THEN RETURN FALSE     -> baked icon missing (never happens)
   iconok := TRUE
@@ -4315,6 +4392,8 @@ ENDPROC
 
 PROC hidewin()
   DEF i
+  wsigok := FALSE               -> 1.3.1b4: a window comes or goes - the
+                                -> main loop rebuilds its wait mask
   IF curcon.win = NIL THEN RETURN
   IF curcon.fwin THEN RETURN
   curcon.armed := FALSE                  -> chain ignores a windowless console
@@ -4426,6 +4505,8 @@ PROC reopenwin()
       pr:PTR TO CHAR, pg:PTR TO CHAR, pb:PTR TO CHAR,
       dri:PTR TO drawinfo, vg, oc, orows, changed, wasalt=FALSE,
       evb[8]:ARRAY OF LONG, e:PTR TO ihev
+  wsigok := FALSE               -> 1.3.1b4: a window comes or goes - the
+                                -> main loop rebuilds its wait mask
   IF curcon.win THEN RETURN
   idc := IDCMP_CLOSEWINDOW
   IF ihon = FALSE THEN idc := idc OR IDCMP_RAWKEY OR IDCMP_VANILLAKEY OR IDCMP_MENUPICK
@@ -4605,6 +4686,8 @@ PROC openwin()
       dri:PTR TO drawinfo,
       pubscr:PTR TO screen, fname[48]:ARRAY OF CHAR, fl, ok,
       gfx:PTR TO gfxbase, dfont:PTR TO textfont, mnode:PTR TO mn, vg
+  wsigok := FALSE               -> 1.3.1b4: a window comes or goes - the
+                                -> main loop rebuilds its wait mask
   snsetup()                     -> 1.2.8b9: Workbench close/reopen notices
   curcon.fwin := FALSE
   curcon.vsminh := 60
@@ -4983,6 +5066,8 @@ ENDPROC
 -> borrowed window goes back to its owner with its IDCMP restored
 PROC closewin()
   DEF i, p:PTR TO dospacket
+  wsigok := FALSE               -> 1.3.1b4: a window comes or goes - the
+                                -> main loop rebuilds its wait mask
   -> ICONIFY: a console closing while iconified must take its AppIcon with it
   IF curcon.appicon
     RemoveAppIcon(curcon.appicon)
@@ -5854,6 +5939,40 @@ ENDPROC
 -> stores per cell in an E loop); 1.2.8b9: one asm pass over the
 -> three planes' rows, and the ring index resolved once instead of
 -> three times - this runs once per scrolled line
+-> 1.3.1b4: model row from -> row to (visible rows), the C engine's
+-> rowcopy: only the cells in use move (the longer of the two lengths, so
+-> the target's old cells are covered), and the target takes the source's
+-> length. inslines, dellines, scrollup and scrolldown copied every row
+-> in full, three planes, and marked it full (slfull) - conbench's
+-> insdel-line found the stock CON: faster where E renders.
+PROC rowcopy(from, to)
+  DEF k:PTR TO console, fi, ti, n, nf, nt, pf, pt
+  k := curcon
+  fi := k.sbtop + from
+  IF fi >= k.sbmax THEN fi := fi - k.sbmax
+  ti := k.sbtop + to
+  IF ti >= k.sbmax THEN ti := ti - k.sbmax
+  IF k.sw
+    pf := slbase(k) + fi + fi
+    pt := slbase(k) + ti + ti
+    nf := Int(pf)
+    nt := Int(pt)
+    IF (nf < 0) OR (nf > k.cols) THEN nf := k.cols
+    IF (nt < 0) OR (nt > k.cols) THEN nt := k.cols
+    n := Max(nf, nt)
+    PutInt(pt, nf)
+  ELSE
+    n := k.cols
+  ENDIF
+  IF n > 0
+    fi := Mul(fi, k.cols)
+    ti := Mul(ti, k.cols)
+    CopyMem(k.sb + fi, k.sb + ti, n)
+    CopyMem(k.sa + fi, k.sa + ti, n)
+    CopyMem(k.ss + fi, k.ss + ti, n)
+  ENDIF
+ENDPROC
+
 PROC clearrow(r)
   DEF k:PTR TO console, i, off, n, p
   k := curcon
@@ -6027,6 +6146,7 @@ ENDPROC
 
 PROC cursdraw()
   DEF x
+  curcon.cursdefer := FALSE     -> 1.3.1b4: drawn now, not at rest
   IF (curcon.win = NIL) OR (curcon.sb = NIL) OR (curcon.viewoff > 0) THEN RETURN
   IF curcon.cursx >= 0 THEN curserase()  -> XOR-safe: never stack two fills
   x := IF curcon.cx >= curcon.cols THEN curcon.cols - 1 ELSE curcon.cx
@@ -6252,6 +6372,9 @@ PROC setidcmp()
   ENDIF
   -> ICONIFY: keep the title-bar gadget's report alive across every IDCMP
   -> recompute (owned windows only - a borrowed frame carries no gadget)
+  -> 1.3.1b4: only when it changes - Intuition's own copy says what is
+  -> set; every cooked switch called this, a ModifyIDCMP each time
+  IF curcon.win.idcmpflags = idc THEN RETURN
   ModifyIDCMP(curcon.win, idc)
 ENDPROC
 
@@ -7179,6 +7302,7 @@ PROC dfstart()
   dfpend := 0
   dffull := FALSE
   dfnarrow := FALSE
+  dfw[1] := -1
   dfgen := dfgen + 1            -> E2a: one increment invalidates every
   IF dfgen > 255                -> stale mark; the array sweep happens
     FOR r := 0 TO 511           -> once per 255 arms, not once per
@@ -7217,6 +7341,7 @@ PROC dfscroll()
   -> E2b: dirt scrolls with the content. 1.2.8b9: by sliding the
   -> window one entry (O(1)); the new bottom row starts clean, and the
   -> window copies back to the buffers' start once every DFROWS slides
+  dfw[1] := -1
   dfo := dfo + 1
   IF dfo >= DFROWS
     CopyMem(dfdb + dfo, dfdb, DFROWS)
@@ -8341,6 +8466,7 @@ PROC dfflush()
       dfspans()
     ENDIF
   ENDIF
+  dfw[1] := -1
   dfgen := dfgen + 1               -> E2a: O(1) invalidation of every
   IF dfgen > 255                   -> mark (stale spans after dffull
     FOR r := 0 TO 511              -> included - the old explicit drop
@@ -8369,6 +8495,7 @@ PROC cfstyled(full)
       ENDIF
     ENDIF
   ENDFOR
+  dfw[1] := -1
   dfgen := dfgen + 1
   IF dfgen > 255
     FOR r := 0 TO 511 DO dfdb[r] := 0
@@ -8691,12 +8818,7 @@ PROC inslines(n)
                  curcon.left + Mul(curcon.cols, curcon.cw) - 1, curcon.topy + Mul(curcon.rows, curcon.ch) - 1)
   ENDIF
   IF curcon.sb
-    FOR r := curcon.rows - 1 TO curcon.cy + n STEP -1
-      CopyMem(visrow(r - n), visrow(r), curcon.cols)
-      CopyMem(sarow(r - n), sarow(r), curcon.cols)
-      CopyMem(ssrow(r - n), ssrow(r), curcon.cols)
-      slfull(r)
-    ENDFOR
+    FOR r := curcon.rows - 1 TO curcon.cy + n STEP -1 DO rowcopy(r - n, r)
     FOR r := curcon.cy TO curcon.cy + n - 1
       clearrow(r)
     ENDFOR
@@ -8715,12 +8837,7 @@ PROC dellines(n)
                  curcon.left + Mul(curcon.cols, curcon.cw) - 1, curcon.topy + Mul(curcon.rows, curcon.ch) - 1)
   ENDIF
   IF curcon.sb
-    FOR r := curcon.cy TO curcon.rows - 1 - n
-      CopyMem(visrow(r + n), visrow(r), curcon.cols)
-      CopyMem(sarow(r + n), sarow(r), curcon.cols)
-      CopyMem(ssrow(r + n), ssrow(r), curcon.cols)
-      slfull(r)
-    ENDFOR
+    FOR r := curcon.cy TO curcon.rows - 1 - n DO rowcopy(r + n, r)
     FOR r := curcon.rows - n TO curcon.rows - 1
       clearrow(r)
     ENDFOR
@@ -8742,12 +8859,7 @@ PROC scrollup(n)
                  curcon.left + Mul(curcon.cols, curcon.cw) - 1, curcon.topy + Mul(curcon.rows, curcon.ch) - 1)
   ENDIF
   IF curcon.sb
-    FOR r := 0 TO curcon.rows - 1 - n
-      CopyMem(visrow(r + n), visrow(r), curcon.cols)
-      CopyMem(sarow(r + n), sarow(r), curcon.cols)
-      CopyMem(ssrow(r + n), ssrow(r), curcon.cols)
-      slfull(r)
-    ENDFOR
+    FOR r := 0 TO curcon.rows - 1 - n DO rowcopy(r + n, r)
     FOR r := curcon.rows - n TO curcon.rows - 1
       clearrow(r)
     ENDFOR
@@ -8766,12 +8878,7 @@ PROC scrolldown(n)
                  curcon.left + Mul(curcon.cols, curcon.cw) - 1, curcon.topy + Mul(curcon.rows, curcon.ch) - 1)
   ENDIF
   IF curcon.sb
-    FOR r := curcon.rows - 1 TO n STEP -1
-      CopyMem(visrow(r - n), visrow(r), curcon.cols)
-      CopyMem(sarow(r - n), sarow(r), curcon.cols)
-      CopyMem(ssrow(r - n), ssrow(r), curcon.cols)
-      slfull(r)
-    ENDFOR
+    FOR r := curcon.rows - 1 TO n STEP -1 DO rowcopy(r - n, r)
     FOR r := 0 TO n - 1
       clearrow(r)
     ENDFOR
@@ -8969,6 +9076,8 @@ PROC fxsetup()
   fxtab[28] := {fxold}
   fxtab[29] := ftreq
   fxtab[31] := NIL
+  fxtab[32] := dfw
+  dfw[1] := -1
   fxtab[30] := {fdelay}
   IF SIZEOF console <> FXCONSIZE THEN RETURN
   IF (Int(execbase + 296) AND 2) = 0 THEN RETURN  -> AttnFlags: engine.bin
@@ -13304,6 +13413,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1b3 (25.10.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.1b4 (25.10.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'
