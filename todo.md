@@ -12,8 +12,12 @@ boot-tested in CTerm 0.1 (commit 71e29b1) — they transplant in.
 
 ## Found by conbench 0.4 (25.10.26), not looked into yet
 
+- **Three rows where the stock CON: beats CCON** (FS-UAE 3.2.1, 68020, 640x256x2; overall
+  CCON is ~7x faster, geometric mean): mode-switch 1012/s vs 275/s (3.7x), insdel-line
+  9360 vs ~6550 B/s (1.4x), query-cursor 158/s vs 125/s (1.26x) - all requests the console
+  must answer or blits it cannot defer, i.e. per-request overhead, not drawing.
 - **Raw mode switches are slow:** mode-switch (SetMode raw on/off) 275 a second against the
-  stock CON:'s 1012 (FS-UAE 3.2.1, 68020, 640x256x2). The cooked->raw switch takes the
+  stock CON:'s 1012. The cooked->raw switch takes the
   alternate-screen snapshot (conbench's own comment says so) - every full-screen program and
   csh's prompt pay it. Measure on the A1200 before deciding.
 
