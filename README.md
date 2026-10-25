@@ -60,7 +60,7 @@ quarter window per blit during a flood.
 ### 1.2.2–1.2.4
 
 Measured, not vibed: the 1.2.2–1.2.4 engine was built across one
-benchmarked campaign, and conbench (its own repository, Conbench) — written for it,
+benchmarked campaign, and [conbench](https://github.com/creep-ltx/conbench) — written for it,
 now its own tool — keeps the receipts. The honest mode throughout:
 **render barriers on** (`SYNC`), which no write-behind buffering can
 hide from. (Unbarriered console benchmarks measure how quickly a
