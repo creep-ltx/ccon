@@ -16,7 +16,8 @@ OSC 7728;N (field `zbit`, before `altowner` - which stays LAST for fcheck;
 FXCONSIZE 4324), Ctrl+Z in cooked mode signals rdtask with 1<<zbit (16-31
 only), DISK_INFO id_NumSoftErrors = 7728 as the "known" mark. fxdiff 0
 mismatches. Verified in FS-UAE 3.2.1 with csh 0.1b15: `Wait 30 | cat`,
-Ctrl+Z -> "[1] Running", jobs, fg, Ctrl+Z again, kill %1. Not on the A1200 yet.
+Ctrl+Z -> "[1] Running", jobs, fg, Ctrl+Z again, kill %1. INSTALLED on the A1200
+25.10.26 (L:ccon-handler-1.3.1b2 kept), Ctrl+Z checked there.
 
 ## NEXT: Audit9 + the 3.1 console study (24.10.26)
 
