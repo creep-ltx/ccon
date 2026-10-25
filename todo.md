@@ -10,6 +10,13 @@ ROM option table). The renderer, the 4000-line scrollback model,
 the line editor and the scroll keys were already built and
 boot-tested in CTerm 0.1 (commit 71e29b1) — they transplant in.
 
+## Found by conbench 0.4 (25.10.26), not looked into yet
+
+- **Raw mode switches are slow:** mode-switch (SetMode raw on/off) 275 a second against the
+  stock CON:'s 1012 (FS-UAE 3.2.1, 68020, 640x256x2). The cooked->raw switch takes the
+  alternate-screen snapshot (conbench's own comment says so) - every full-screen program and
+  csh's prompt pay it. Measure on the A1200 before deciding.
+
 ## 1.3.1b3 (25.10.26): Ctrl+Z for csh's pipes
 
 OSC 7728;N (field `zbit`, before `altowner` - which stays LAST for fcheck;
