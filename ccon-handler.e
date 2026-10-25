@@ -3137,18 +3137,30 @@ PROC parsecon(bname)
       -> read "-1" as invalid (silently ignored, the OLD behaviour)
       -> - the literal string is checked first so it means FILL,
       -> not "leave the default".
+      -> 1.3.1b5: and the open string's size outranks L:ccon.cfg's
+      -> RIGHT/BOTTOM edges, as the file promises - "0/20/640/256"
+      -> under a cfg with RIGHT=1040 opened 1040 wide (pwr/pwb -2 =
+      -> no edge given, so edgefold leaves pww/pwh alone)
       IF StrCmp(tok, '-1')
         curcon.pww := -1
+        curcon.pwr := -2
       ELSE
         v := tcnum(tok)
-        IF v >= 0 THEN curcon.pww := v
+        IF v >= 0
+          curcon.pww := v
+          curcon.pwr := -2
+        ENDIF
       ENDIF
     ELSEIF f = 3
       IF StrCmp(tok, '-1')
         curcon.pwh := -1
+        curcon.pwb := -2
       ELSE
         v := tcnum(tok)
-        IF v >= 0 THEN curcon.pwh := v
+        IF v >= 0
+          curcon.pwh := v
+          curcon.pwb := -2
+        ENDIF
       ENDIF
     ELSEIF f = 4
       -> the title-slot footgun (his catch, 19.7.26): with explicit
@@ -13413,6 +13425,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1b4 (25.10.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.1b5 (26.10.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'

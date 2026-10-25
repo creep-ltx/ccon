@@ -30,7 +30,10 @@ flatters CCON in short ones):
   COUNT is the time; an EClock read pair costs ~44 us, subtract it.
 - Still slower than stock: an insert/delete at the TOP of a 30-row window as one
   synchronous op (885 vs 795 us, idw probe) - not a conbench row; rows 5 and 28 win.
-- Check on the A1200 before installing; fxdiff 0 mismatches (8 seeds).
+- INSTALLED on the A1200 26.10.26 as 1.3.1b5 (L:ccon-handler-1.3.1b3 kept); 1.3.1b5 adds
+  the open-string size beating L:ccon.cfg's RIGHT/BOTTOM (found when conbench's 640x256
+  window opened 1040x760). A1200, same window: insdel-line 185k vs 124k B/s, query-cursor
+  1403 vs 1136, mode-switch 7921 vs 7422. fxdiff 0 mismatches (8 seeds).
 - tests/pkcost.e: per-request cost probe (write1, waitchar, query, read-waiting,
   modeswitch, text13, insdel13), TO file.
 

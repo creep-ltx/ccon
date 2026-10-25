@@ -11,6 +11,22 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.1b5] — 2026-10-26 (beta)
+
+### Fixed
+- **A size in the open string beats `L:ccon.cfg`'s RIGHT/BOTTOM.**
+  With `RIGHT=1040` in the file, `NewShell CCON:0/20/640/256/x` opened
+  1040 wide, against the file's own rule that the open string always
+  wins. Width and height given there now cancel the file's edges for
+  that window.
+
+### Measured on a real A1200 (PiStorm, 68040 under Emu68, RTG 1280x960)
+- Same 640x256 window, conbench 0.4: insdel-line 185435 vs stock
+  124364 B/s, query-cursor 1403 vs 1136/s, mode-switch 7921 vs 7422/s.
+  (A PiStorm, not a stock Amiga.)
+
+---
+
 ## [1.3.1b4] — 2026-10-25 (beta)
 
 ### Faster
