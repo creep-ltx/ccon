@@ -28,6 +28,16 @@ kept the emulator busy for 6+ minutes. *Code-read only, not run:* K7 K8 K9 K10
 K13 K15 K16 K18 K19 K21 K22 K25 K26 K27. **Check on the A1200:** conbench
 speed (K26 adds a ClipRect BitMap test to the direct-row path - if 3.2's
 layers set it on visible rects, direct rows switch off: slower, not wrong).
+**On the A1200 since 25.10.26** (L:ccon-handler-1.3.1b1 kept). Found there and
+fixed in the same build: K4's refusal used `rawmode` and so beeped at every csh
+prompt (csh edits in raw mode) - now only a menu strip (Ed) or the alternate
+screen (More) refuses; K5's raw half (a raw-mode paste was still cut byte-wise).
+A1200 checks: ccsig ALL PASS, `Wait 30 | cat` broke in 3 s, iconify at a csh
+prompt works; conbench SCALE 20 SYNC in 800x400 windows (127x89 cells via
+ccon.cfg): 1.3.1b1 18.10 s, 1.3.1b2 18.12 s - the same, K26 costs nothing.
+**csh's own limit, not CCON's:** a paste over ~1 KB in csh still glues - csh's
+key queue (KQ 1024, src/term.c) drops keys silently when full, mid-line.
+
 **Second batch (25.10.26), same 1.3.1b2:** K14 K17 K20 (completion only with
 a queued READ; the borrowed C: locks stay - DupLock would be DOS from the
 handler) K23 K24 K29 (fcheck probes the LAST field, altowner: keep it last)

@@ -3991,12 +3991,16 @@ PROC doiconify()
   IF curcon.win = NIL THEN RETURN
   IF curcon.fwin THEN RETURN
   IF curcon.appicon THEN RETURN         -> already iconified
-  -> 1.3.1b2 (Audit9 K4): not under a raw client. Ed hangs its menu
-  -> strip on this window and More retitles it, both through the
+  -> 1.3.1b2 (Audit9 K4): not under a fullscreen client. Ed hangs its
+  -> menu strip on this window and More retitles it, both through the
   -> pointer DISK_INFO gave them; a restore opens a NEW window, and
   -> their later ClearMenuStrip / SetWindowTitles would land in the
   -> freed old one. Beep instead, as CTerm refuses a screen switch.
-  IF curcon.rawmode
+  -> NOT every raw client: csh edits its line in raw mode and keeps no
+  -> window pointer (A1200, 25.10.26: a plain raw test refused iconify
+  -> at every csh prompt). The tells: a menu strip (Ed) or the
+  -> alternate screen (More).
+  IF (curcon.win.menustrip <> NIL) OR curcon.altvalid
     DisplayBeep(NIL)
     RETURN
   ENDIF
@@ -6440,7 +6444,7 @@ ENDPROC
 -> because the hint makes the pending state impossible to miss.
 PROC dopaste(forceexec)
   DEF got, i, id, sz, take, c, scr[32]:ARRAY OF CHAR,
-      lw:PTR TO LONG, b:PTR TO CHAR, exec, trunc=FALSE
+      lw:PTR TO LONG, b:PTR TO CHAR, exec, trunc=FALSE, lstart=TRUE, ln
   IF curcon.selon THEN RETURN
   flushout(curcon)              -> S5: paste renders through the editor
                                 -> against settled output
@@ -6502,7 +6506,18 @@ PROC dopaste(forceexec)
             -> This does NOT raise the ceiling - see the note under the
             -> loop - it makes hitting it AUDIBLE instead of silent.
             IF curcon.rawmode
+              -> 1.3.1b2 (Audit9 K5, raw half - found on the A1200 under
+              -> csh, which edits in raw mode): a line goes in whole or
+              -> not at all here too; byte-wise truncation left half a
+              -> line that the next typed command was glued onto
+              IF lstart
+                ln := 0
+                WHILE ((c + ln) < take) AND (b[c + ln] <> 10) DO ln++
+                IF (c + ln) < take THEN ln++    -> its LF
+                IF inqroom(ln) = FALSE THEN trunc := TRUE
+              ENDIF
               IF inqroom(1) = FALSE THEN trunc := TRUE
+              lstart := b[c] = 10
             ENDIF
             IF commitfull THEN trunc := TRUE  -> K5: a line did not fit
             IF trunc = FALSE THEN injectbyte(b[c])

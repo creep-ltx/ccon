@@ -27,15 +27,16 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
   a bare task (K12).
 - **Ctrl+C stops a pending paste**, as on stock.
 - **Iconify never leaves a program pointing at a closed window.**
-  Over a fullscreen program (Ed, More) Right-Amiga+I and the iconify
-  gadget now beep instead: they keep the window's address for menus
-  and title. Programs that put DOS requesters on the window get them on
+  Over a fullscreen program (Ed with its menus, More on its own page)
+  Right-Amiga+I and the iconify gadget now beep instead: they keep the
+  window's address for menus and title. A raw-mode line editor such as
+  csh's iconifies as before. Programs that put DOS requesters on the window get them on
   the restored window (K4).
 - **Keys pressed just as a window iconifies** no longer draw into the
   closed window (K3).
 - **A paste larger than the input queue** no longer glues the next
-  command onto half a line: a line goes in whole or stays in the
-  editor, with a beep (K5).
+  command onto half a line: a line goes in whole or not at all, with a
+  beep, in the line editor and in raw mode (K5).
 - **Curly quotes in UTF-8 text** (`”`, bytes E2 80 9D) no longer hide
   the rest of the output in the window title: the 8-bit $9D title
   introducer is gone (stock has none); `ESC ]` still works (K6). Only
