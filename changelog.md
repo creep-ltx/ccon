@@ -56,6 +56,28 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
   empty bitplane or obscured parts never get direct drawing (K25,
   K26); control bytes in L:ccon-history are dropped on load and
   32-bit screens no longer confuse the pen checks (K27).
+- **The Shell pointing Ctrl+C back at itself works:** a process's own
+  message port has node type 0 on 3.2, and 1.3.1b1 ignored such a
+  `CHANGE_SIGNAL`; everything that is not a task is now taken as a port.
+- **Colour codes with more than four numbers** work (up to 16, as
+  `ESC[0;1;4;7;31m`); 256-colour and RGB codes (`38;5;n`, `38;2;r;g;b`)
+  are skipped instead of setting red or resetting the colours (K27).
+- **Escape sequences:** ESC, CAN or SUB inside a CSI abort it, and an
+  ESC inside a title sequence no longer eats the byte after it; a Tab at
+  the last column stays put; the cursor report never says one column
+  past the edge (K27).
+- **Pasting with Shift+Right-Amiga+V or PASTEEXEC:** Tabs become spaces,
+  CR from CRLF files is dropped, and other control bytes no longer act on
+  the line editor (K27).
+- Smaller: the transcript under More or Ed is re-coloured after a
+  Workbench mode change too (K14); only the program that opened the
+  fullscreen page restores the transcript when it closes (K17); Tab
+  completion uses the Shell's directory only while the Shell waits for
+  input (K20); the handler refuses to shut down while screennotify
+  still lists it (K23); a restore with an unchanged grid no longer
+  redraws a fullscreen program's page (K24); WAIT_CHAR answers with the
+  number of waiting lines (K27); an old icon message can no longer
+  restore another window (K27).
 
 ---
 

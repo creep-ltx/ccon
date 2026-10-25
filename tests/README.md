@@ -410,6 +410,7 @@ NAME.e NAME`, run the Linux ones with `vamos NAME`.
 | File | Runs on | What it shows |
 |---|---|---|
 | `boldtest.e` | Amiga | Audit8 J27: bold text leaves no pixel behind when overwritten plain (grab and compare rows 1 and 3) |
+| `ccsig.e` | Amiga, from a CCON: shell | Audit9 K1/K2/K11/K12: CHANGE_SIGNAL query, set and restore (res2 a port), and Ctrl+C reaching the target after another process wrote (press Ctrl+C when asked) |
 | `ccinfo0.e` | Amiga, from a CCON: shell | audit5 A2: ACTION_DISK_INFO with a NIL InfoData is refused, not written through |
 | `edargtest.e` | Linux | Ctrl+P's argument finder and repeat, the Alt/Ctrl word jumps and deletes (42 checks; Audit8 J20 added the trailing-`*` cases) |
 | `ederasetest.e` | Linux | eraseedit's blip-only fast path is pixel-identical to the old full-row repaint |

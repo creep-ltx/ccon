@@ -591,8 +591,15 @@ static inline void sgr1(struct con *k, LONG v)
 /* csidispatch's 'm' */
 static void sgr(struct con *k, LONG *par, LONG np)
 {
-    LONG i;
-    for (i = 0; i <= np; i++) sgr1(k, par[i]);
+    LONG i, skip = 0;
+    for (i = 0; i <= np; i++) {
+        /* Audit9 K27: 38/48's sub-parameters (5;n, 2;r;g;b) are skipped,
+           as E does */
+        if (skip > 0) skip--;
+        else if (par[i] == 38 || par[i] == 48) {
+            if (i < np) skip = par[i + 1] == 5 ? 2 : par[i + 1] == 2 ? 4 : 0;
+        } else sgr1(k, par[i]);
+    }
 }
 
 /* the end of the printable run starting at j (render()'s prtbl class:
@@ -676,7 +683,7 @@ LONG frun(struct fx *x, const UBYTE *s, LONG i, LONG len)
                     if (par[np] > 999) par[np] = 999;
                 } else if (c == ';') {
                     np++;
-                    if (np > 3) np = 3;
+                    if (np > 3) return i;        /* Audit9 K27: more than 4: E */
                     par[np] = 0;
                 } else if (c >= 0x40) break;
                 else return i;                   /* private / odd: E */
@@ -728,7 +735,8 @@ LONG frun(struct fx *x, const UBYTE *s, LONG i, LONG len)
             i++;
         } else if (c == 9) {
             *x->alteat = FALSE;
-            do dfputc(x, k, 32); while ((k->cx & 7) != 0 && k->cx < k->cols);
+            if (k->cx < k->cols)                 /* Audit9 K27: as E */
+                do dfputc(x, k, 32); while ((k->cx & 7) != 0 && k->cx < k->cols);
             i++;
         } else if (c == 12) {
             LONG r;
@@ -1482,6 +1490,7 @@ LONG mscan(struct con *k)
 LONG fcheck(struct con *k)
 {
     return k->cx + k->sb * 3 + k->mmask * 5 + k->vblank * 7 + k->osct[83] * 11
-         + k->cursty * 13 + k->anstab[7] * 17 + k->jslk * 19;
+         + k->cursty * 13 + k->anstab[7] * 17 + k->jslk * 19
+         + k->altowner * 23;      /* Audit9 K29: the LAST field - move it along */
 }
 

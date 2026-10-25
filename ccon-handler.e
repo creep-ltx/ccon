@@ -142,7 +142,7 @@ CONST MARGIN=0,        -> v1.1b43: was 4 - stock CON: has no inset at
                         -> clamped to 255 (gridcalc), rows is not - a
                         -> window taller than DFROWS rows just runs the
                         -> legacy immediate path (dfstart declines)
-      FXCONSIZE=4264,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
+      FXCONSIZE=4320,   -> 1.2.8b9: SIZEOF console as engine/con.h has it
       WOBSZ=16384,      -> S5 write-behind buffer, bytes per console.
                         -> (1.2.8b9: 4096 -> 16384, so a paced flush
                         -> can pool several screens of a burst)
@@ -273,7 +273,8 @@ OBJECT console
   -> cooked input plumbing
   inqh, inqt                    -> head/tail of the inq ring below
   cesc                          -> CSI parser state (survives split
-  cpar[4]:ARRAY OF LONG         -> writes; up to 4 parameters)
+  cpar[16]:ARRAY OF LONG        -> writes; up to 16 parameters - 1.3.1b2,
+                                -> Audit9 K27: was 4, `38;2;r;g;b` overran)
   cnp
   cpriv                         -> a '?'/'>' rode the params (v1.1b11:
                                 -> CSI ?47h/l is More's altscreen)
@@ -562,9 +563,17 @@ OBJECT console
                                 -> pr_WindowPtr named this window when it
                                 -> was hidden; set NIL meanwhile, pointed
                                 -> at the new window when it reopens
+  iconid                        -> 1.3.1b2 (Audit9 K27): this console's
+                                -> AppIcon id - a stale AppMessage for a
+                                -> console freed meanwhile cannot restore
+                                -> a NEW console at the same address
+  altowner                      -> 1.3.1b2 (Audit9 K17): the writer that
+                                -> entered the alternate screen (?47h); only
+                                -> ITS close restores the transcript
 ENDOBJECT
 
-DEF commitfull=FALSE,           -> 1.3.1b2 (Audit9 K5): a Return found no
+DEF iconser=0,                  -> 1.3.1b2 (Audit9 K27): AppIcon ids
+    commitfull=FALSE,           -> 1.3.1b2 (Audit9 K5): a Return found no
                                 -> room for its line (dopaste stops there)
     p96base=NIL,                -> 1.2.8b8: Picasso96API.library
     dpbpp=1,                    -> 1.2.8b8: bytes per pixel, this paint
@@ -1355,15 +1364,7 @@ PROC killhandler()
   DEF msg:PTR TO mn, c:PTR TO console, i   -> ICONIFY: stray AppMessages + icons
   -> 1.2.8b9: off the screennotify list first; it refuses while a notice
   -> is out, so answer those and ask again (KingCON retries the same way)
-  IF snclient
-    i := 0
-    WHILE (snrem() = FALSE) AND (i < 50)
-      WHILE msg := GetMsg(snport) DO ReplyMsg(msg)
-      Delay(2)
-      i++
-    ENDWHILE
-    IF i < 50 THEN snclient := NIL
-  ENDIF
+  snoff()                       -> 1.3.1b2: shared with ACTION_DIE (K23)
   -> Audit8 J24: still registered after 50 tries - screennotify may yet
   -> PutMsg here. Leave the port (and the library) alive, set to ignore,
   -> so a late notice lands in valid memory and signals no one: a small
@@ -1826,7 +1827,7 @@ PROC satisfywaits()
     timercon := NIL
   ENDIF
   FOR i := 0 TO curcon.wcn - 1
-    ReplyPkt(curcon.wcq[i], DOSTRUE, 0)
+    ReplyPkt(curcon.wcq[i], DOSTRUE, inqlines())  -> K27: res2 = lines waiting
   ENDFOR
   curcon.wcn := 0
   rearmtimer()
@@ -1883,9 +1884,23 @@ PROC dopkt(pkt:PTR TO dospacket)
     -> b11 safety net: a client that DIED on the alternate screen
     -> (Ctrl+C'd More) never sends ?47l - its closing handle
     -> restores the transcript instead of leaving it lost forever
+    -> 1.3.1b2 (Audit9 K17): only the close of the task that entered
+    -> the alternate screen (or of any, when that task is gone or not
+    -> known) - a `run` job's handle closing under More must not snap
+    -> More's page back to the transcript
     IF c.altvalid AND c.win
-      IF altrestore()
-        IF c.rawmode = FALSE THEN drawedit()
+      t := c.altowner
+      IF t
+        IF porttask(pkt.port) <> t
+          IF taskalive(t) = FALSE THEN t := NIL
+        ELSE
+          t := NIL
+        ENDIF
+      ENDIF
+      IF t = NIL
+        IF altrestore()
+          IF c.rawmode = FALSE THEN drawedit()
+        ENDIF
       ENDIF
     ENDIF
     IF c.opens <= 0
@@ -1986,7 +2001,7 @@ PROC dopkt(pkt:PTR TO dospacket)
     -> DOSTRUE now; timeout 0 = DOSFALSE now; else park the packet and
     -> let timer.device answer (input arrival wakes all waiters)
     IF inavail() > 0
-      ReplyPkt(pkt, DOSTRUE, 0)
+      ReplyPkt(pkt, DOSTRUE, inqlines())  -> K27: res2 = lines waiting
     ELSEIF (pkt.arg1 <= 0) OR (treq = NIL) OR (curcon.wcn >= WCMAX)
       ReplyPkt(pkt, DOSFALSE, 0)
     ELSE
@@ -2060,14 +2075,19 @@ PROC dopkt(pkt:PTR TO dospacket)
       ENDIF
     ENDIF
     IF pkt.arg2
+      -> a task or process given directly is kept as it is; ANYTHING
+      -> else is a port. 1.3.1b2: a process's own pr_MsgPort has ln_Type
+      -> 0 on 3.2 (tests/ccsig, FS-UAE 3.2.1), not NT_MSGPORT - 1.3.1b1
+      -> only took NT_MSGPORT and ignored the Shell pointing the break
+      -> back at itself
       bn := pkt.arg2
-      IF bn.type = NT_MSGPORT
+      IF (bn.type = NT_TASK) OR (bn.type = NT_PROCESS)
+        curcon.rdtask := pkt.arg2
+        curcon.breaktask := pkt.arg2
+      ELSE
         bp := pkt.arg2
         curcon.rdtask := porttask(bp)
         IF curcon.rdtask THEN curcon.breaktask := curcon.rdtask
-      ELSEIF (bn.type = NT_TASK) OR (bn.type = NT_PROCESS)
-        curcon.rdtask := pkt.arg2
-        curcon.breaktask := pkt.arg2
       ENDIF
       curcon.breakarg := pkt.arg2
     ENDIF
@@ -2121,7 +2141,11 @@ PROC dopkt(pkt:PTR TO dospacket)
     -> 1.2.8b6: and not while the ASL helper lives - a console can
     -> close under an open requester, and that process is executing
     -> OUR seglist until it signals.
-    IF (conlist <> NIL) OR arbusy
+    -> 1.3.1b2 (Audit9 K23): and not while screennotify still lists us -
+    -> killhandler's fallback could only leave the port deaf, and a deaf
+    -> port never answers the next notice: screennotify waits for that
+    -> answer before the Workbench may close. Off the list first, or no.
+    IF (conlist <> NIL) OR arbusy OR (snoff() = FALSE)
       ReplyPkt(pkt, DOSFALSE, ERROR_OBJECT_IN_USE)
     ELSE
       IF mydnode THEN mydnode.task := NIL
@@ -3335,6 +3359,27 @@ PROC snsetup()
 ENDPROC
 
 -> RemWorkbenchClient(handle): FALSE while a notification is out
+-> 1.3.1b2 (Audit9 K23): off the screennotify list, answering notices
+-> that are out meanwhile (it refuses while one is); TRUE = off (or was
+-> never on)
+PROC snoff()
+  DEF msg:PTR TO mn, i
+  IF snclient = NIL THEN RETURN TRUE
+  -> one snrem() per try and none after the last: E's AND does not
+  -> short-circuit, and an uncounted success would leave snclient set
+  -> on a client screennotify has already freed
+  FOR i := 1 TO 50
+    IF snrem()
+      snclient := NIL
+      RETURN TRUE
+    ENDIF
+    IF snport
+      WHILE msg := GetMsg(snport) DO ReplyMsg(msg)
+    ENDIF
+    Delay(2)
+  ENDFOR
+ENDPROC FALSE
+
 PROC snrem()
   DEF b, h, r=0
   b := snbase
@@ -3675,7 +3720,7 @@ PROC doappmsg(am:PTR TO appmessage)
     -> this guard exists to prevent. conok(NIL) walks the list and returns
     -> FALSE, so the old `c AND` NIL check is subsumed.
     IF conok(c)
-     IF c.appicon
+     IF (c.appicon <> NIL) AND (am.id = c.iconid)   -> K27: this icon's own
       RemoveAppIcon(c.appicon)
       c.appicon := NIL
       oldcur := curcon
@@ -3965,7 +4010,9 @@ PROC doiconify()
     curcon.icontried := TRUE
     curcon.myicon := iconload(curcon.piconpath)
   ENDIF
-  curcon.appicon := AddAppIconA(0, curcon, 'CCON', wbport, 0,
+  iconser++
+  curcon.iconid := iconser
+  curcon.appicon := AddAppIconA(curcon.iconid, curcon, 'CCON', wbport, 0,
                                 IF curcon.myicon THEN curcon.myicon ELSE iconobj,
                                 NIL)
   IF curcon.appicon THEN hidewin()      -> only vanish if the icon really went up
@@ -4349,6 +4396,19 @@ PROC retranslate()
       IF p <> 255 THEN a[i] := (v AND $70) OR p
     ENDIF
   ENDFOR
+  -> 1.3.1b2 (Audit9 K14): the transcript saved under a fullscreen client
+  -> (More, Ed) carries the same pens - altrestore copies it back at ?47l
+  IF curcon.altvalid AND (curcon.alta <> NIL)
+    a := curcon.alta
+    n := Mul(curcon.altrows, curcon.altcols)
+    FOR i := 0 TO n - 1
+      v := a[i]
+      IF v AND $80
+        p := map[v AND 15]
+        IF p <> 255 THEN a[i] := (v AND $70) OR p
+      ENDIF
+    ENDFOR
+  ENDIF
 ENDPROC
 
 PROC reopenwin()
@@ -4477,6 +4537,13 @@ PROC reopenwin()
   oc := curcon.cols
   orows := curcon.rows
   gridcalc()
+  -> 1.3.1b2 (Audit9 K24): regrid's ring clamp first - a window taller
+  -> than its ring otherwise read "changed" on every restore (the
+  -> fullscreen client's page replaced, SIZEWINDOW reported)
+  IF curcon.sb
+    IF curcon.rows > (curcon.sbmax - 2) THEN curcon.rows := Max(1, curcon.sbmax - 2)
+    IF curcon.jeff > (curcon.rows - 1) THEN curcon.jeff := Max(1, curcon.rows - 1)  -> J5
+  ENDIF
   changed := (curcon.cols <> oc) OR (curcon.rows <> orows)
   IF changed
     curcon.jslk := FALSE
@@ -6482,8 +6549,13 @@ PROC injectbyte(c)
   IF curcon.rawmode
     enqueue(c)                  -> the client sees paste as input
   ELSE
+    -> 1.3.1b2 (Audit9 K27): pasted text is text - a Tab no longer
+    -> completes, an ESC no longer wipes the line, a CR (CRLF files) no
+    -> longer sends an extra empty line; other controls are dropped
+    IF c = 13 THEN RETURN
+    IF c = 9 THEN c := 32
     IF c = 10 THEN c := 13      -> LF = Return to the line editor
-    dovanilla(c, 0)
+    IF (c = 13) OR ((c >= 32) AND (c <> 127)) THEN dovanilla(c, 0)
   ENDIF
 ENDPROC
 
@@ -8341,10 +8413,10 @@ PROC csistart()
   curcon.cnp := 0
   curcon.cpriv := FALSE
   curcon.cpar[0] := 0
-  curcon.cpar[1] := 0
-  curcon.cpar[2] := 0
-  curcon.cpar[3] := 0
-ENDPROC
+  curcon.cpar[1] := 0          -> 0-3 as before (CUP & co. read [1] with
+  curcon.cpar[2] := 0          -> one parameter given, and the C engine's
+  curcon.cpar[3] := 0          -> parse writes exactly these); 4-15 are
+ENDPROC                        -> zeroed as ';' reaches them
 
 -> the full-screen vocabulary: what More and Ed actually speak.
 -> A/B/C/D cursor moves, H/f position (row;col, 1-based), J erase
@@ -8353,7 +8425,7 @@ ENDPROC
 -> CSI 1;1;rows;cols SPACE r (how dir learns it can do columns).
 -> Everything else is consumed silently.
 PROC csidispatch(c)
-  DEF n, i, v
+  DEF n, i, v, j, skip
   n := curcon.cpar[0]
   -> 1.2.8b8: anything that may move or fill below the cursor cancels
   -> the slide-back. Audit8 J22: not the harmless ones - colour (m),
@@ -8423,6 +8495,7 @@ PROC csidispatch(c)
       IF curcon.altvalid = FALSE
         dfflush()               -> S3: the snapshot must see settled pixels
         altsave()
+        curcon.altowner := curcon.wrtask   -> K17
       ENDIF
     ENDIF
   ELSEIF c = "l"
@@ -8435,9 +8508,22 @@ PROC csidispatch(c)
   ELSEIF c = "m"
     -> SGR (M5d): reset, bold (bright pens on a 16-pen screen),
     -> 30-37 fg, 39 default fg, 40-47 bg, 49 default bg
+    skip := 0
     FOR i := 0 TO curcon.cnp
       v := curcon.cpar[i]
-      IF v = 0
+      IF skip > 0
+        -> 1.3.1b2 (Audit9 K27): the sub-parameters of 38/48 (256-colour
+        -> 5;n or RGB 2;r;g;b) are not SGR codes - `38;5;31m` set red and
+        -> `38;2;255;128;0m` ended in a reset. Not rendered, skipped.
+        skip--
+      ELSEIF (v = 38) OR (v = 48)
+        IF i < curcon.cnp
+          j := curcon.cpar[i + 1]
+          skip := 0
+          IF j = 5 THEN skip := 2
+          IF j = 2 THEN skip := 4
+        ENDIF
+      ELSEIF v = 0
         curcon.curfg := curcon.deffg
         curcon.curbg := 0
         curcon.bold := FALSE
@@ -8761,7 +8847,9 @@ ENDPROC
 -> console->app report, read by the client's own input loop.
 PROC sendcpr()
   DEF b[24]:STRING, i
-  StringF(b, '\d;\d', curcon.cy + 1, curcon.cx + 1)
+  -> K27: at the pending wrap cx = cols - the cursor is still on the
+  -> last column, as stock reports it
+  StringF(b, '\d;\d', curcon.cy + 1, Min(curcon.cx, curcon.cols - 1) + 1)
   IF inqroom(StrLen(b) + 2) = FALSE THEN RETURN
   enqueue($9B)
   FOR i := 0 TO StrLen(b) - 1
@@ -8874,9 +8962,11 @@ PROC fxsetup()
   k.cursty := 6
   k.anstab[7] := 7
   k.jslk := 8
+  k.altowner := 9               -> Audit9 K29 (J29's open half): the LAST
+                                -> field of OBJECT console - keep it last
   v := fcall1(4, k)
   Dispose(k)
-  IF v = 454 THEN fastok := TRUE
+  IF v = 661 THEN fastok := TRUE  -> 454 + 9 * 23
 ENDPROC
 
 -> frun(fx, buf, i, len): the next index E must take
@@ -9193,19 +9283,28 @@ PROC renderx(buf, len, i0, pro)
       ENDIF
       i := i + 1
     ELSEIF curcon.cesc = 4    -> ESC \ is ST; anything else aborts
-      IF c = 92 THEN oscdone()
-      curcon.cesc := 0
-      i := i + 1
+      IF c = 92
+        oscdone()
+        curcon.cesc := 0
+        i := i + 1
+      ELSE
+        curcon.cesc := 1      -> K27: the ESC starts a new sequence and c
+      ENDIF                   -> is its next byte - no longer eaten
+
     ELSEIF curcon.cesc = 2    -> CSI parameters end at the final byte >= $40
       IF (c >= "0") AND (c <= "9")
         curcon.cpar[curcon.cnp] := Mul(curcon.cpar[curcon.cnp], 10) + (c - 48)
         IF curcon.cpar[curcon.cnp] > 999 THEN curcon.cpar[curcon.cnp] := 999
       ELSEIF c = ";"
         curcon.cnp := curcon.cnp + 1
-        IF curcon.cnp > 3 THEN curcon.cnp := 3
+        IF curcon.cnp > 15 THEN curcon.cnp := 15   -> K27: was 3
         curcon.cpar[curcon.cnp] := 0
       ELSEIF (c = "?") OR (c = ">")
         curcon.cpriv := TRUE    -> DEC private marker (More: ?47h/l)
+      ELSEIF c = 27
+        curcon.cesc := 1        -> K27: ESC aborts the CSI and starts anew
+      ELSEIF (c = 24) OR (c = 26)
+        curcon.cesc := 0        -> K27: CAN / SUB abort it
       ELSEIF c >= $40
         csidispatch(c)
         curcon.cesc := 0
@@ -9238,9 +9337,11 @@ PROC renderx(buf, len, i0, pro)
     ELSEIF c = 9
       alteat := FALSE           -> audit5 A10: TAB spaces are output -
                                 -> any output disarms the exit-LF eater
-      REPEAT
-        IF dfon THEN dfputc(32) ELSE outchr(32)
-      UNTIL (Mod(curcon.cx, 8) = 0) OR (curcon.cx >= curcon.cols)
+      IF curcon.cx < curcon.cols  -> K27: at the pending wrap a TAB stays;
+        REPEAT                    -> it used to wrap, then space out
+          IF dfon THEN dfputc(32) ELSE outchr(32)
+        UNTIL (Mod(curcon.cx, 8) = 0) OR (curcon.cx >= curcon.cols)
+      ENDIF
       i := i + 1
     ELSEIF c = 12
       -> form feed (^L): clear the screen and home the cursor, exactly as
@@ -11414,15 +11515,14 @@ PROC tcclient()
   IF curcon.rdn > 0
     pkt := curcon.rdq[0]
     sender := pkt.port
-    t := sender.sigtask
-  ELSEIF curcon.breaktask
-    t := curcon.breaktask
-    -> Audit8 J13: the last WRITER, which may be a `run` job that has
-    -> since exited - its task memory is gone, and Alt+Tab walks its
-    -> CLI path and sends packets to what it finds there. Only a task
-    -> exec still lists is followed.
-    IF taskalive(t) = FALSE THEN t := NIL
+    t := porttask(sender)
   ENDIF
+  -> 1.3.1b2 (Audit9 K20): no fallback to the last writer any more. A
+  -> task that is RUNNING (not blocked on our read) can exit while the
+  -> completion walks its CLI path across packets that Wait, so a single
+  -> taskalive() test left a gap; a blocked reader cannot exit under us.
+  -> Audit8 J13's first option. Without a queued read, completion that
+  -> needs the client's directory or path simply finds nothing.
   IF t = NIL THEN RETURN NIL
   IF t.ln.type <> NT_PROCESS THEN RETURN NIL
 ENDPROC t
@@ -11535,7 +11635,9 @@ PROC iconfallback()
   curcon.wbgone := FALSE
   IF curcon.appicon = NIL
     IF wbensure()
-      curcon.appicon := AddAppIconA(0, curcon, 'CCON', wbport, 0,
+      iconser++
+      curcon.iconid := iconser
+      curcon.appicon := AddAppIconA(curcon.iconid, curcon, 'CCON', wbport, 0,
                                     IF curcon.myicon THEN curcon.myicon ELSE iconobj,
                                     NIL)
     ENDIF
@@ -13107,6 +13209,18 @@ PROC enqueue(c)
     curcon.inqt := nt
   ENDIF
 ENDPROC
+
+-> 1.3.1b2 (Audit9 K27): WAIT_CHAR's res2 - the Guru Book gives the
+-> number of lines waiting (raw mode: bytes, as there are no lines)
+PROC inqlines()
+  DEF i, n=0
+  IF curcon.rawmode THEN RETURN inavail()
+  i := curcon.inqh
+  WHILE i <> curcon.inqt
+    IF curcon.inq[i] = 10 THEN n++
+    i := (i + 1) AND (INQMAX - 1)
+  ENDWHILE
+ENDPROC n
 
 PROC inavail() IS (curcon.inqt - curcon.inqh + INQMAX) AND (INQMAX - 1)
 

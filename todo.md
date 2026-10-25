@@ -28,9 +28,21 @@ kept the emulator busy for 6+ minutes. *Code-read only, not run:* K7 K8 K9 K10
 K13 K15 K16 K18 K19 K21 K22 K25 K26 K27. **Check on the A1200:** conbench
 speed (K26 adds a ClipRect BitMap test to the direct-row path - if 3.2's
 layers set it on visible rects, direct rows switch off: slower, not wrong).
-Still open: K14 K17 K20 K23 K24 K29, the rest of K27 (CSI parameters > 4 -
-see the 3.1 note E2, CSI ESC/CAN abort, PASTEEXEC byte routing, WAIT_CHAR
-res2, stale AppMessages), T4 (tests for CHANGE_SIGNAL/retranslate/shineok).
+**Second batch (25.10.26), same 1.3.1b2:** K14 K17 K20 (completion only with
+a queued READ; the borrowed C: locks stay - DupLock would be DOS from the
+handler) K23 K24 K29 (fcheck probes the LAST field, altowner: keep it last)
+K27's rest (cpar[16], 38/48 sub-parameters skipped in E and C, the C parse
+hands >4 parameters to E, CSI ESC/CAN/SUB abort, OSC ESC no longer eats a
+byte, TAB at the pending wrap stays, CPR <= cols, WAIT_CHAR res2 = lines,
+AppIcon ids, paste bytes), T4 (tests/ccsig.e). FXCONSIZE 4320; fxdiff 4
+seeds 0 mismatches with the layout check ok. *Verified in FS-UAE 3.2.1:*
+tests/ccsig ALL PASS (and it found that a process's pr_MsgPort has ln_Type 0
+on 3.2 - CHANGE_SIGNAL now takes every non-task as a port); 38;2 / 38;5 /
+5-parameter SGR, OSC 8 leaves the title, OSC 2 sets it, ESC aborts a CSI;
+a CRLF paste with a Tab runs both lines once. Not run: K14 K17 K20 K23 K24,
+TAB at the pending wrap, CPR. Still open: T4's retranslate/shineok tests,
+jsettle on a hidden console (no regression), ACTION_FORCE/QUEUE = the 3.1
+note's P1 (packets 2001-2004).
 Raw-mode Ctrl+C still sends byte 3 only (3.1 also signals; 3.2 not checked).
 
 - **Audit9** (end of `audit.md`, vs 1.3.1b1): K1-K30 + T1-T6. Fix first, as one
