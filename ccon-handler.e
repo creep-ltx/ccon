@@ -587,6 +587,8 @@ DEF iconser=0,                  -> 1.3.1b2 (Audit9 K27): AppIcon ids
                                 -> began (vblank at dfstart)
     dflost=0,                   -> 1.2.8b8: widest dirt scrolled off the
                                 -> top this batch (cols+1 of it)
+    dptv=-1,                    -> 1.3.1b6 (issue #10): the Text() target
+    dptvok=FALSE,               -> last judged, and whether it is the system's
     dgtf=NIL,                   -> 1.2.8b8 direct rows: the font the
     dgch=0,                     -> glyph cache below was built from
     dgl=NIL:PTR TO CHAR,        -> 256 glyphs x ch rows, one byte each
@@ -7541,11 +7543,80 @@ ENDPROC TRUE
 
 PROC dgsync()
   IF curcon.dpok = FALSE THEN RETURN FALSE
+  IF dptextok() = FALSE THEN RETURN FALSE  -> issue #10
   IF curcon.rp = NIL THEN RETURN FALSE
   IF (dgtf = curcon.rp.font) AND (dgch = curcon.ch) AND (dgl <> NIL) THEN RETURN TRUE
   IF dggo(curcon.rp.font) THEN RETURN TRUE
   curcon.dpok := FALSE
 ENDPROC FALSE
+
+-> 1.3.1b6 (GitHub AmigaTools issue #10): direct painting is only the
+-> same picture as Text() when Text() is the system's own. A program that
+-> patches it with SetFunction() - AAText (antialiased TrueType), font
+-> replacers, translators - never saw the rows CCON wrote itself: since
+-> 1.3.0 the first prompt of every new window (dffull's direct rebuild),
+-> and after the measuring every row whenever direct won. So every direct
+-> painter asks here first (dgsync). The system's own = in the Kickstart
+-> ROM, inside a LoadModule'd graphics.library's romtag span, or inside
+-> the code of the RTG system (rtg.library, Picasso96API.library,
+-> cybergraphics.library, a .card driver), which may patch Text() itself
+-> on an RTG screen. Anything else: Text() paints, as before 1.3.0. The
+-> verdict is kept until the vector changes, so a flush pays two reads;
+-> a patch started or removed later is seen at the next flush.
+PROC dptextok()
+  DEF a
+  a := gfxbase - 60             -> Text()'s vector: JMP abs.l
+  IF Int(a) <> $4EF9 THEN RETURN FALSE
+  a := Long(a + 2)
+  IF a = dptv THEN RETURN dptvok
+  dptv := a
+  dptvok := dpsysaddr(a)
+ENDPROC dptvok
+
+PROC dpsysaddr(t)
+  DEF rt, n, nm, ok=FALSE
+  IF (t >= $F80000) AND (t < $1000000) THEN RETURN TRUE  -> the ROM
+  IF (t >= $E00000) AND (t < $E80000) THEN RETURN TRUE   -> 1 MB ROMs' half
+  rt := FindResident('graphics.library')
+  IF rt
+    IF (t >= rt) AND (t < Long(rt + 6)) THEN RETURN TRUE -> rt_EndSkip
+  ENDIF
+  Forbid()
+  n := Long(execbase + 378)     -> SysBase->LibList.lh_Head
+  WHILE (ok = FALSE) AND (Long(n) <> NIL)
+    nm := Long(n + 10)          -> ln_Name
+    IF nm
+      IF dprtgname(nm) THEN ok := dpinlib(n, t)
+    ENDIF
+    n := Long(n)
+  ENDWHILE
+  Permit()
+ENDPROC ok
+
+PROC dprtgname(nm:PTR TO CHAR)
+  DEF l
+  IF StrCmp(nm, 'rtg.library') THEN RETURN TRUE
+  IF StrCmp(nm, 'Picasso96API.library') THEN RETURN TRUE
+  IF StrCmp(nm, 'cybergraphics.library') THEN RETURN TRUE
+  l := StrLen(nm)
+  IF l > 5 THEN RETURN StrCmp(nm + l - 5, '.card')
+ENDPROC FALSE
+
+-> t between the lowest and highest target of the library's own vectors
+-> (its code)
+PROC dpinlib(lb, t)
+  DEF neg, i, v, lo=-1, hi=0
+  neg := Int(lb + 16) AND $FFFF -> lib_NegSize
+  i := 6
+  WHILE i <= neg
+    IF Int(lb - i) = $4EF9
+      v := Long(lb - i + 2)
+      IF (lo = -1) OR (v < lo) THEN lo := v
+      IF v > hi THEN hi := v
+    ENDIF
+    i := i + 6
+  ENDWHILE
+ENDPROC (lo <> -1) AND (t >= lo) AND (t <= hi)
 
 PROC dggo(tf:PTR TO textfont)
   DEF c, ci, loc:PTR TO LONG, kern:PTR TO INT, off, w, y, k, x, bits,
@@ -13425,6 +13496,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1b5 (26.10.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.1b6 (3.11.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'

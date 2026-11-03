@@ -421,3 +421,17 @@ NAME.e NAME`, run the Linux ones with `vamos NAME`.
 | `masktest.e` | Linux | the plane-mask invariant, simulated plane by plane, with controls that must corrupt |
 | `sbresizetest.e` | Linux | audit B2: the ring invariant when a resize grows the window (a model of 1.2b3) |
 | `srbench.e` | Amiga | the raw graphics primitives CCON's render path is built from, timed on the real screen |
+
+## tlog.e - runs on the Amiga, tests issue #10 (Text() patches)
+
+Patches graphics.library `Text()` with `SetFunction()` and logs every
+string it is given, until Ctrl-C. Build with `ecompile tlog.e tlog`.
+
+    Run >NIL: RAM:tlog >RAM:t.log
+    NewShell CCON:
+    Break <tlog's CLI number> C
+    Type RAM:t.log
+
+The new window's prompt (`7.Workbench:> `) must be in the log. 1.3.0
+to 1.3.1b5 logged only the window title and the cursor: the first
+prompt was drawn directly. Fixed in 1.3.1b6.

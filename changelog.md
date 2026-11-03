@@ -11,6 +11,29 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.1b6] — 2026-11-03 (beta)
+
+### Fixed
+- **Programs that patch `Text()` see every line again**
+  ([AmigaTools issue #10](https://github.com/creep-ltx/AmigaTools/issues/10)).
+  Since 1.3.0 the first prompt of every new window was written
+  straight into the screen (direct drawing) and never went through
+  graphics.library `Text()`, so AAText and other font, antialiasing or
+  translation patches missed it - and, once a window's measuring picked
+  direct drawing, every line after it. CCON now draws directly only
+  while `Text()` is the system's own (the Kickstart ROM, a loaded
+  graphics.library, or the RTG system: rtg.library, Picasso96,
+  CyberGraphX, a .card driver). With any other patch in place, every
+  line goes through `Text()` as in 1.2.7; a patch started or removed
+  later is noticed at the next screen update.
+
+### Tested
+- FS-UAE, 3.2.1, AGA, with `tests/tlog.e` (logs every string sent
+  to `Text()`): 1.3.1b5 logged only the title and the cursor for a new
+  Shell window, 1.3.1b6 the prompt too - the reporter's log exactly.
+
+---
+
 ## [1.3.1b5] — 2026-10-26 (beta)
 
 ### Fixed
