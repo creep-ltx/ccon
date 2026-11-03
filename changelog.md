@@ -7,7 +7,25 @@ mounted as the system `CON:`/`RAW:`.
 
 Beta build numbers (e.g. 1.2b16) are in parentheses as references.
 Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
-1.2.4, 1.2.5, 1.2.6, 1.2.7 and 1.3.0 are released and tagged.
+1.2.4, 1.2.5, 1.2.6, 1.2.7, 1.3.0 and 1.3.1 are released and tagged.
+
+---
+
+## [1.3.1] — 2026-11-03 (tag `ccon-1.3.1`; Aminet util/shell/ltx-ccon.lha)
+
+The fix release after 1.3.0: the betas 1.3.1b1 to b6 below, with the
+beta suffix dropped. In short:
+
+- **Programs that patch `Text()` see every line again** - AAText,
+  font replacers and translators missed the first prompt of every new
+  window since 1.3.0 (b6, GitHub issue #10).
+- **Ctrl+C is safe and goes where it should**: never to a program that
+  has ended, and to the program a shell names with
+  `ACTION_CHANGE_SIGNAL` (b1, b2).
+- **Ctrl+Z for csh's pipes** (b3).
+- **Faster than the stock `CON:` in all 24 conbench rows** (b4).
+- **The ninth source audit (Audit9), every finding closed** (b2).
+- **The open string's size beats `L:ccon.cfg`'s RIGHT/BOTTOM** (b5).
 
 ---
 

@@ -178,6 +178,29 @@ LIMITATIONS
 
 HISTORY
 
+  1.3.1
+    - AAText and other programs that patch graphics.library
+      Text() see every line again: since 1.3.0 the first prompt
+      of a new window (and, once direct drawing won, later lines)
+      skipped them. Direct drawing now only runs while Text() is
+      the system's own
+
+    - Ctrl+C is safe and reaches the right program: never a
+      program that has already ended, and the one a shell names
+      with ACTION_CHANGE_SIGNAL (csh's pipes)
+
+    - Ctrl+Z for csh 0.1b15 and later: a running pipe becomes a
+      job and the prompt comes back
+
+    - Faster than the stock CON: in every conbench row, raw-mode
+      switches, cursor queries and line inserts included
+
+    - A ninth source audit, closed: iconify over Ed or More,
+      pastes larger than the input queue, curly quotes in UTF-8
+      text, long colour codes, 256-colour codes, and more
+
+    - A size in the open string beats L:ccon.cfg's RIGHT/BOTTOM
+
   1.3.0
     - The speed release, for every Amiga: the busiest output
       paths run as compiled C inside the handler on a 68020 or
