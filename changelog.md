@@ -11,6 +11,19 @@ Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
 
 ---
 
+## [1.3.2b1] — 2026-11-27 (beta)
+
+- **A drop activates the console window.** After an icon was dragged
+  onto a CCON window, the path went in but Workbench's window stayed
+  active, so the next keystroke went nowhere until a click. The stock
+  3.2.3 Shell activates its window after a drop; CCON now does the
+  same (GitHub issues ccon #1 and AmigaTools #11, reported by
+  Dafama2k7). Checked on Workbench 3.2.1 in FS-UAE: 1.3.1 leaves
+  Workbench active, 1.3.2b1 activates the Shell and a typed key lands
+  after the dropped path.
+
+---
+
 ## [1.3.1] — 2026-11-03 (tag `ccon-1.3.1`; Aminet util/shell/ltx-ccon.lha)
 
 The fix release after 1.3.0: the betas 1.3.1b1 to b6 below, with the

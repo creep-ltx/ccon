@@ -3852,6 +3852,16 @@ PROC doappmsg(am:PTR TO appmessage)
         oldcur := curcon
         curcon := c
         dodrop(am)
+        -> 1.3.2b1 (GitHub ccon #1 / AmigaTools #11): a drop leaves
+        -> Workbench's window active, so the dropped path sat on a line
+        -> the keyboard could not reach until a click. The stock 3.2.3
+        -> Shell activates its window after a drop; so do we. Only if it
+        -> survived dodrop (c.win re-checked) and is not already active.
+        IF conok(c)
+          IF c.win
+            IF (c.win.flags AND WFLG_WINDOWACTIVE) = 0 THEN ActivateWindow(c.win)
+          ENDIF
+        ENDIF
         curcon := oldcur
       ENDIF
     ENDIF
@@ -13496,6 +13506,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.1 (3.11.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.2b1 (27.11.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'
