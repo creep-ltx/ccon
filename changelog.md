@@ -7,7 +7,13 @@ mounted as the system `CON:`/`RAW:`.
 
 Beta build numbers (e.g. 1.2b16) are in parentheses as references.
 Dates are release/build dates. 1.0, 1.1, 1.2, 1.2.1, 1.2.2, 1.2.3,
-1.2.4, 1.2.5, 1.2.6, 1.2.7, 1.3.0 and 1.3.1 are released and tagged.
+1.2.4, 1.2.5, 1.2.6, 1.2.7, 1.3.0, 1.3.1 and 1.3.2 are released and tagged.
+
+---
+
+## [1.3.2] — 2026-11-27 (tag `ccon-1.3.2`)
+
+The 1.3.2b1 fix below, with the beta suffix dropped.
 
 ---
 

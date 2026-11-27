@@ -10,8 +10,9 @@ can bolt it on). Around that core: a window per open, a modern
 line editor, and a shell feel that fingers trained on
 fish/bash/zsh recognize at once.
 
-**Status: 1.3.1.** Every milestone boot-verified on AmigaOS 3.2 —
-and, since 1.2.4, on real hardware (A1200 + PiStorm). 1.3.1 is a fix
+**Status: 1.3.2.** Every milestone boot-verified on AmigaOS 3.2 —
+and, since 1.2.4, on real hardware (A1200 + PiStorm). 1.3.2 makes a
+window active when an icon is dropped on it. 1.3.1 was a fix
 release: programs that patch `Text()` (AAText) see every line again,
 Ctrl+C is safe, csh gets Ctrl+Z, a ninth source audit is closed, and
 CCON beats the stock `CON:` in every conbench row. 1.3.0 was **the

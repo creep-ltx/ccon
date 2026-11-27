@@ -13506,6 +13506,6 @@ PROC satisfyreads()
   ENDWHILE
 ENDPROC
 
-vers: CHAR '$VER: ccon-handler 1.3.2b1 (27.11.26) CCON: LTX console handler', 0
+vers: CHAR '$VER: ccon-handler 1.3.2 (27.11.26) CCON: LTX console handler', 0
 engine:
   INCBIN 'engine/engine.bin'

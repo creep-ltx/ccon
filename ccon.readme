@@ -178,6 +178,11 @@ LIMITATIONS
 
 HISTORY
 
+  1.3.2
+    - An icon dropped on a CCON window makes that window active,
+      so you can type straight on after the inserted path, as in
+      the stock 3.2.3 Shell (GitHub issue #1)
+
   1.3.1
     - AAText and other programs that patch graphics.library
       Text() see every line again: since 1.3.0 the first prompt
